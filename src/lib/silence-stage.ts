@@ -70,23 +70,41 @@ function collectLessonClips(structure: StructureJson): Map<string, "demo" | "nor
   return clips;
 }
 
-/** Línea 'silence_start: X' del stderr de ffmpeg silencedetect. */
-const SILENCE_START_REGEX = /silence_start:\s*(-?\d+(?:\.\d+)?)/;
+/** Línea 'lavfi.silence_start=X' del stdout de ametadata. */
+const SILENCE_START_REGEX = /lavfi\.silence_start=\s*(-?\d+(?:\.\d+)?)/;
 
-/** Línea 'silence_end: Y | silence_duration: Z' del stderr de ffmpeg silencedetect. */
-const SILENCE_END_REGEX =
-  /silence_end:\s*(-?\d+(?:\.\d+)?)\s*\|\s*silence_duration:\s*(-?\d+(?:\.\d+)?)/;
+/** Línea 'lavfi.silence_end=Y' del stdout de ametadata. */
+const SILENCE_END_REGEX = /lavfi\.silence_end=\s*(-?\d+(?:\.\d+)?)/;
+
+/** Línea 'lavfi.silence_duration=Z' del stdout de ametadata. */
+const SILENCE_DURATION_REGEX =
+  /lavfi\.silence_duration=\s*(-?\d+(?:\.\d+)?)/;
 
 /**
- * Corre ffmpeg silencedetect sobre un clip y parsea su stderr en una lista
- * de intervalos de silencio.
+ * Corre ffmpeg silencedetect sobre un clip y devuelve la lista de intervalos
+ * de silencio.
  *
- * silencedetect imprime pares silence_start/silence_end por cada tramo de
- * silencio detectado. Si el clip TERMINA en silencio, ffmpeg nunca imprime
- * el silence_end correspondiente (el análisis corta en el EOF sin cerrar el
- * tramo abierto): en ese caso cerramos manualmente ese último intervalo con
- * `durationSeconds` (la duración real del clip, tomada de probe/media.json)
- * como su fin.
+ * POR QUÉ NO SE PARSEA EL LOG DE ffmpeg (bug real, no paranoia):
+ * silencedetect reporta sus hallazgos por el LOGGER, en nivel `info`. Con
+ * `-v error` esas líneas se suprimen por completo y ffmpeg sale con código 0
+ * y sin una sola línea de silencio — indistinguible de "este clip no tiene
+ * silencios". Eso hacía que TODOS los clips de un job salieran con 0
+ * silencios y shrink 100%, y el resultado parecía plausible (audio de campo,
+ * poco silencio) en vez de parecer un bug. Verificado sobre el mismo
+ * archivo: `-v error` → 0 silencios, `-v info` → 6.
+ *
+ * La solución no es subir el nivel de log (volvería a romperse si alguien lo
+ * baja, y arrastra el ruido de ffmpeg al stderr): es pedirle a
+ * `ametadata=mode=print:file=-` que escriba las marcas por STDOUT como datos.
+ * Esa salida no depende de la verbosidad del logger.
+ *
+ * `-vn` descarta el video: silencedetect solo necesita el audio, y no
+ * decodificar 4K hace la etapa muchísimo más rápida.
+ *
+ * Si el clip TERMINA en silencio, ffmpeg nunca emite el silence_end
+ * correspondiente (el análisis corta en el EOF sin cerrar el tramo abierto):
+ * en ese caso cerramos ese último intervalo con `durationSeconds` (la
+ * duración real del clip, de probe/media.json).
  */
 async function detectSilences(
   srcFile: string,
@@ -96,28 +114,34 @@ async function detectSilences(
     throw new Error("ffmpeg-static no disponible");
   }
 
-  let stderr = "";
+  let stdout = "";
   try {
-    const result = await execFileAsync(ffmpegPath, [
-      "-v",
-      "error",
-      "-i",
-      srcFile,
-      "-af",
-      `silencedetect=noise=${SILENCE_NOISE_DB}dB:d=${SILENCE_MIN_D}`,
-      "-f",
-      "null",
-      "-",
-    ]);
-    stderr = result.stderr;
+    const result = await execFileAsync(
+      ffmpegPath,
+      [
+        "-v",
+        "error",
+        "-i",
+        srcFile,
+        // Sin video: silencedetect solo mira el audio.
+        "-vn",
+        "-af",
+        `silencedetect=noise=${SILENCE_NOISE_DB}dB:d=${SILENCE_MIN_D},ametadata=mode=print:file=-`,
+        "-f",
+        "null",
+        "-",
+      ],
+      // Un clip largo con muchos silencios genera bastantes líneas de
+      // metadata; el buffer amplio evita un ENOBUFS espurio.
+      { maxBuffer: 32 * 1024 * 1024 }
+    );
+    stdout = result.stdout;
   } catch (err) {
-    // execFile lanza si ffmpeg sale con código != 0, pero con "-v error"
-    // igual imprime las líneas de silencedetect (que van por stderr con
-    // nivel "info" propio del filtro, no del logger general) antes de
-    // fallar; las recuperamos del error para no perder el análisis parcial.
-    const stderrFromError = (err as { stderr?: string }).stderr;
-    if (typeof stderrFromError === "string" && stderrFromError.length > 0) {
-      stderr = stderrFromError;
+    // Si ffmpeg falla a mitad de camino, igual aprovechamos las marcas que
+    // alcanzó a imprimir en vez de perder el análisis parcial.
+    const stdoutFromError = (err as { stdout?: string }).stdout;
+    if (typeof stdoutFromError === "string" && stdoutFromError.length > 0) {
+      stdout = stdoutFromError;
     } else {
       throw err;
     }
@@ -125,19 +149,35 @@ async function detectSilences(
 
   const silences: SilenceInterval[] = [];
   let openStart: number | null = null;
+  let pendingEnd: number | null = null;
 
-  for (const line of stderr.split("\n")) {
+  // ametadata imprime una clave por línea, en orden:
+  //   lavfi.silence_start=28.5611
+  //   lavfi.silence_end=29.0667
+  //   lavfi.silence_duration=0.505578
+  for (const line of stdout.split("\n")) {
     const startMatch = SILENCE_START_REGEX.exec(line);
     if (startMatch) {
       openStart = Number(startMatch[1]);
+      pendingEnd = null;
       continue;
     }
+
     const endMatch = SILENCE_END_REGEX.exec(line);
-    if (endMatch && openStart !== null) {
-      const end = Number(endMatch[1]);
-      const duration = Number(endMatch[2]);
-      silences.push({ start: openStart, end, duration });
+    if (endMatch) {
+      pendingEnd = Number(endMatch[1]);
+      continue;
+    }
+
+    const durationMatch = SILENCE_DURATION_REGEX.exec(line);
+    if (durationMatch && openStart !== null && pendingEnd !== null) {
+      silences.push({
+        start: openStart,
+        end: pendingEnd,
+        duration: Number(durationMatch[1]),
+      });
       openStart = null;
+      pendingEnd = null;
     }
   }
 
