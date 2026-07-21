@@ -49,6 +49,8 @@ function stripExtension(filename: string): string {
 interface FileToTranscribe {
   filename: string;
   durationSeconds: number;
+  /** Canales de audio reportados por probe-stage (undefined si no hubo probe). */
+  audioChannels?: number;
 }
 
 /**
@@ -94,7 +96,11 @@ export async function runTranscribeStage(
   // Si todavía no corrió la etapa de probe, caemos de vuelta a listar
   // source/ directamente (sin duración conocida) para no bloquear la etapa.
   const files: FileToTranscribe[] = media
-    ? media.map((m) => ({ filename: m.filename, durationSeconds: m.durationSeconds }))
+    ? media.map((m) => ({
+        filename: m.filename,
+        durationSeconds: m.durationSeconds,
+        audioChannels: m.audioChannels,
+      }))
     : (await fs.readdir(sourcePath(jobId)))
         .filter((name) => !name.startsWith("."))
         .map((filename) => ({ filename, durationSeconds: 0 }));
@@ -136,9 +142,25 @@ export async function runTranscribeStage(
     await setStatus(filename, "running");
 
     try {
-      const result: TranscriptResult = await engine.transcribe(videoPath, language);
-      const rmsDb = await measureAudioEnergy(videoPath);
-      result.narration = detectNarration(result, rmsDb);
+      // Si el archivo no tiene pista de audio (audioChannels === 0 en
+      // media.json), NO invocamos al motor Whisper: sin audio, Whisper no
+      // falla de forma limpia sino que alucina texto sobre silencio, y un
+      // clip mudo es B-roll por definición, no algo a "transcribir". Armamos
+      // directamente un TranscriptResult vacío con narration:false.
+      const result: TranscriptResult =
+        file.audioChannels === 0
+          ? {
+              language,
+              durationSeconds: file.durationSeconds,
+              segments: [],
+              narration: false,
+            }
+          : await engine.transcribe(videoPath, language);
+
+      if (file.audioChannels !== 0) {
+        const rmsDb = await measureAudioEnergy(videoPath);
+        result.narration = detectNarration(result, rmsDb);
+      }
 
       const baseName = stripExtension(filename);
       await writeTranscriptFiles(outDir, baseName, result);
