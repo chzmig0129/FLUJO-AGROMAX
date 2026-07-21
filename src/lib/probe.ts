@@ -98,6 +98,31 @@ export async function probeVideo(filePath: string): Promise<VideoFileMeta> {
 }
 
 /**
+ * Analiza un único archivo con ffprobe y devuelve el JSON crudo completo
+ * (format + streams), sin normalizar ni interpretar campos. Pensado para
+ * que otras etapas (probe-stage) extraigan datos adicionales (fps, códec,
+ * canales de audio, sample rate) sin duplicar la invocación a ffprobe.
+ * Nunca lanza: si ffprobe falla o el output no es JSON válido, devuelve null.
+ */
+export async function probeRaw(filePath: string): Promise<any | null> {
+  try {
+    const { stdout } = await execFileAsync(ffprobePath, [
+      "-v",
+      "error",
+      "-print_format",
+      "json",
+      "-show_format",
+      "-show_streams",
+      filePath,
+    ]);
+    return JSON.parse(stdout);
+  } catch {
+    // Archivo corrupto, no es un video/audio válido, o el binario no lo pudo leer.
+    return null;
+  }
+}
+
+/**
  * Corre probeVideo secuencialmente sobre todos los archivos de un directorio,
  * ordenados por nombre (orden alfabético estable vía localeCompare).
  */
