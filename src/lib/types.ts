@@ -41,6 +41,10 @@ export interface VideoFileMeta {
  *   silencio, proxies y cortes) sobre los clips 'leccion' de la estructura.
  * - 'prepared': probe/silence.json, assets/proxies/ y plan/cuts/ fueron
  *   generados con éxito.
+ * - 'assembling': corriendo las etapas 9 (intros) y 11 (ensamblaje headless)
+ *   sobre las lecciones de la estructura.
+ * - 'assembled': assets/intros/ y render/<lessonId>.mp4 fueron generados y
+ *   VERIFICADOS como completos (ver assembly/verify.ts).
  * - 'error': ocurrió un error irrecuperable en cualquier etapa del pipeline.
  */
 export type JobStatus =
@@ -55,6 +59,8 @@ export type JobStatus =
   | "planned"
   | "preparing"
   | "prepared"
+  | "assembling"
+  | "assembled"
   | "error";
 
 /**
@@ -89,6 +95,10 @@ export interface JobJson {
     silence?: StageTiming;
     proxies?: StageTiming;
     cuts?: StageTiming;
+    /** Etapa 9: render de los intros por clase (assets/intros/). */
+    intros?: StageTiming;
+    /** Etapa 11: ensamblaje headless por clase (render/). */
+    assembly?: StageTiming;
   };
   errorMessage?: string;
 }
@@ -353,4 +363,71 @@ export interface CutsFile {
   fps: number;
   generatedAt: string;
   clips: CutsClip[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Etapas 9 (intros) y 11 (ensamblaje headless)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Estado de una clase dentro del ensamblaje, usado en
+ * progress/assembly-progress.json para reportar avance X/N a la UI.
+ * - 'skipped': la clase ya tenía un render verificado y vigente (mismo
+ *   fingerprint de entradas), así que no se volvió a renderizar.
+ */
+export type LessonAssemblyStatus =
+  | "pending"
+  | "intro"
+  | "assembling"
+  | "done"
+  | "skipped"
+  | "error";
+
+/**
+ * Representación persistida de jobs/<id>/progress/assembly-progress.json.
+ * `lessons` va indexado por lessonId; `backend` deja registrado con qué
+ * implementación de AssemblyBackend se corrió (ver assembly/index.ts).
+ */
+export interface AssemblyProgressJson {
+  backend: string;
+  total: number;
+  lessons: Record<
+    string,
+    {
+      title: string;
+      status: LessonAssemblyStatus;
+      /** Frames renderizados / totales de la clase (solo mientras corre). */
+      frame?: number;
+      totalFrames?: number;
+      error?: string;
+    }
+  >;
+}
+
+/**
+ * Sidecar de verificación escrito junto a cada render:
+ * render/<lessonId>.json. Es la ÚNICA fuente de verdad sobre "este MP4 está
+ * completo": la existencia del .mp4 no alcanza (un archivo a medio escribir
+ * también existe). Solo se escribe DESPUÉS de que ffprobe confirmó el
+ * archivo y de que el rename atómico terminó.
+ *
+ * `sourcesFingerprint` resume las entradas (proxies + cuts + intro) que
+ * produjeron este render: si cambia, el render se considera obsoleto y se
+ * vuelve a generar; si no, un re-run lo salta sin re-renderizar nada.
+ */
+export interface RenderSidecar {
+  lessonId: string;
+  status: "complete";
+  backend: string;
+  file: string;
+  expectedFrames: number;
+  actualFrames: number;
+  durationSeconds: number;
+  sizeBytes: number;
+  width: number;
+  height: number;
+  fps: number;
+  hasAudioStream: boolean;
+  sourcesFingerprint: string;
+  renderedAt: string;
 }

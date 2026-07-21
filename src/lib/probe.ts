@@ -16,7 +16,12 @@ const execFileAsync = promisify(execFile);
 // ruta directa al binario) o un objeto { path }. Resolvemos ambos casos.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ffprobeStatic = require("ffprobe-static") as { path?: string } | string;
-const ffprobePath: string =
+/**
+ * Ruta al binario de ffprobe. Se exporta para que las etapas que también
+ * necesitan ffprobe (por ejemplo la verificación de renders en
+ * assembly/verify.ts) resuelvan el binario una sola vez y de la misma forma.
+ */
+export const ffprobePath: string =
   typeof ffprobeStatic === "string" ? ffprobeStatic : ffprobeStatic.path ?? "ffprobe";
 
 interface FfprobeStream {

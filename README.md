@@ -86,7 +86,12 @@ jobs/
       decisiones.md                       # explicación en Markdown de las decisiones del agente, baja confianza primero, etapa 4
       cuts/
         <lessonId>.json                     # cortes deterministas por lección (huecos de Whisper), etapa 5C
+    render/
+      <lessonId>.mp4                        # MP4 final de la clase (intro + tramos keep), etapa 11
+      <lessonId>.json                         # sidecar de verificación: la ÚNICA marca de "render completo"
     assets/
+      intros/
+        <lessonId>.mp4                          # intro renderizado de la clase, etapa 9
       proxies/
         <clip sin extensión>.mp4  # proxy de edición 1080p30 h264/aac por clip 'leccion', etapa 5B
 ```
@@ -399,6 +404,69 @@ curl -X POST http://localhost:3000/api/jobs/<jobId>/prep
 
 `src/app/api/jobs/[jobId]/prep/route.ts` valida que el job exista (404 si no), que su `status` sea uno desde el que tiene sentido preparar (`"planned"`, `"preparing"` o `"prepared"`; 400 si todavía no fue planeado) y que no haya ya un pipeline corriendo en memoria para ese job (409 si lo hay), y dispara `runPrepOnly` (`src/lib/pipeline.ts`) en background — nunca vuelve a llamar `runProbeStage`, `runTranscribeStage`, `runFramesStage` ni `runPlanStage`. También acepta jobs en `status: "error"` si ya tienen `plan/structure.json` (el prerequisito real de la preparación), para reintentar solo 5A/5B/5C tras un fallo puntual (por ejemplo de `ffmpeg`) sin re-planear todo el curso. Es re-corrible barato: 5A y 5C sobrescriben sus salidas por completo, y 5B (la etapa más cara en CPU) salta los proxies que ya estén al día. En la UI, el botón **"Preparar corte (silencio + proxies + cortes)"** (job sin `plan/cuts/` aún) o **"Re-preparar corte"** (job ya preparado) de `/jobs/[jobId]` llama a este mismo endpoint.
 
+## Etapas 9 y 11: intros + ensamblaje headless
+
+Es la primera etapa que produce **video terminado**: un MP4 por clase en `jobs/<id>/render/<lessonId>.mp4`, a 1080p/30 H.264 + AAC. Todavía sin overlays ni subtítulos — eso va encima de esto.
+
+### Principio: el backend de ensamblaje es intercambiable
+
+El ensamblaje **no está amarrado a una herramienta**. Es una interfaz —"dado el plan de una clase, produce su MP4"— con implementaciones detrás:
+
+| `ASSEMBLY_BACKEND` | Estado | Para qué |
+|---|---|---|
+| `remotion` (default) | implementado | ensamblaje headless en servidor, sin GUI, paralelizable por workers |
+| `palmier` | stub | modo de refinamiento manual futuro; la interfaz ya está lista, los métodos lanzan `NotImplemented` |
+
+El resto del código no sabe cuál corrió: solo queda registrado el nombre en el sidecar y en el progreso. Ambos backends consumen el MISMO `plan/` (`structure.json` + `cuts/`).
+
+La pieza clave es que **el backend no conoce el job**:
+
+```
+plan/structure.json + plan/cuts/<lessonId>.json
+       │
+       ▼   src/lib/assembly/plan.ts   (puro, sin render)
+LessonAssemblyPlan   ← rutas resueltas + timeline en frames + expectedFrames
+       │
+       ▼   AssemblyBackend            (remotion | palmier)
+render/<lessonId>.mp4
+```
+
+Todo lo delicado (resolver clip→proxy, expandir los rangos `keep`, calcular la duración esperada) ocurre una sola vez en el planner y queda congelado en el plan. Agregar un backend nuevo es escribir dos métodos: `renderIntro` y `assembleLesson`.
+
+### Etapa 9 — Intros (`remotion/Intro.tsx` → `assets/intros/<lessonId>.mp4`)
+
+Una composición Remotion determinista (sin modelo, sin aleatoriedad): mismas props ⇒ mismos píxeles. Un render por CLASE, con props sacadas de `structure.json`: título de la clase, `MÓDULO N · CLASE M`, kicker del curso y subtítulo (el `topic` del primer segmento). Marca de la plataforma: `#22C55E` / `#16A34A` sobre fondo oscuro, tipografía **Poppins** cargada desde los `.ttf` versionados en `remotion/fonts/` (sin pedirle nada a Google en tiempo de render: determinista y a prueba de servidores sin internet). Salida 1920x1080/30fps, 5 segundos.
+
+### Etapa 11 — Ensamblaje por clase (`remotion/Lesson.tsx` → `render/<lessonId>.mp4`)
+
+Por cada clase: intro en el frame 0 y después SOLO los tramos `keep` de `plan/cuts/<lessonId>.json`, en orden. **Eso ES el ripple/quita-silencios** — acá no se recalcula ningún corte. Las clases `kind: demo` pasan por el mismo camino (su archivo de cortes no tiene cortes internos, así que van completas).
+
+Por qué no se pierde la sincronía de audio:
+
+- Los recortes son en **frames** (`trimBefore`/`trimAfter`), no en segundos, y los proxies son CFR a 30fps: el frame N es exactamente N/30 s. Sin redondeo por tramo, sin deriva acumulada.
+- No hay concatenación de streams: Remotion le pide a cada frame de salida su fuente exacta y el audio se muestrea del mismo instante del mismo archivo.
+- **Clips sin audio**: se marcan `muted` y Remotion emite una única pista AAC para toda la composición, así que ese tramo aporta silencio y concatena limpio junto a los que sí tienen audio — sin normalizar pistas ni inyectar `anullsrc` a mano.
+
+### Verificación: cómo se sabe que un render llegó a COMPLETO
+
+Nunca por la existencia del archivo — un MP4 a medio escribir también existe. La cadena (`src/lib/assembly/verify.ts`) es:
+
+1. El backend escribe a `<final>.tmp.mp4`, nunca a la ruta final. La extensión `.mp4` se mantiene a propósito: un intermedio sin contenedor claro rompe a las herramientas que lo deducen por extensión (`ffmpeg` falla con *Unable to find a suitable output format* — por eso `proxy-stage.ts` pasa `-f mp4` explícito — y Remotion directamente se niega).
+2. `ffprobe` juzga el archivo como **árbitro independiente** del renderer (no se confía en su exit code): contenedor legible, streams de video y audio, resolución/fps esperados y, sobre todo, **conteo real de paquetes de video** (`-count_packets`) contra `expectedFrames`. Un archivo truncado devuelve menos paquetes aunque el header diga otra cosa.
+3. Solo si todo pasa: `fs.rename(.tmp.mp4 → final)`, atómico por estar en el mismo filesystem. Si algo falla, se borra el `.tmp.mp4` y no aparece nada en `render/`.
+4. Se escribe `render/<lessonId>.json` (el sidecar) con frames esperados/reales, duración, tamaño y la huella de las entradas. **Ese sidecar es la única marca de "completo"** que lee el resto del sistema: la ruta que sirve los videos rechaza cualquier MP4 que no lo tenga.
+
+### Re-correr sin re-transcodificar ni re-cortar (`POST /api/jobs/<id>/assemble`)
+
+```bash
+curl -X POST http://localhost:3000/api/jobs/<jobId>/assemble               # salta lo ya renderizado
+curl -X POST http://localhost:3000/api/jobs/<jobId>/assemble -d '{"force":true}' -H 'content-type: application/json'
+```
+
+Una clase se salta si tiene sidecar `complete`, su MP4 sigue en disco y la **huella de entradas** (mtime+tamaño de los proxies usados, del archivo de cortes y del intro) no cambió. Si cambió cualquiera, se re-renderiza solo esa clase. Nada de esto toca `source/` ni `assets/proxies/`: no se re-transcodifica ni se recalculan cortes.
+
+El progreso por clase vive en `progress/assembly-progress.json` (`pending` → `intro` → `assembling` → `done` | `skipped` | `error`), y la UI lo muestra como X/N en el paso **"Ensamblando clases"**. Al terminar, cada render se puede **reproducir en el navegador** desde la sección "Clases ensambladas" (servido por `GET /api/jobs/<id>/render/<lessonId>.mp4`, con soporte de HTTP Range para que el `<video>` pueda buscar).
+
 ## Setup del motor de transcripción
 
 La transcripción (etapa 3) nunca corre transcripción Whisper directamente en Node: cada motor es un **script Python independiente** que Node invoca vía `spawn` y que imprime a stdout un único JSON normalizado (`{ language, duration, segments }`, con `words` por segmento). Esto permite intercambiar el motor sin tocar el código Node que lo consume — ver `src/lib/transcribe/types.ts`, `engine.ts` y `python-engine.ts`.
@@ -419,6 +487,8 @@ Ambos motores usan el modelo `large-v3-turbo` y devuelven exactamente el mismo c
 | `TRANSCRIBE_CONCURRENCY` | `2` | Cantidad de archivos transcritos en simultáneo dentro de un mismo job. |
 | `PYTHON_BIN` | `.venv-whisper/bin/python` | Ruta al intérprete Python usado para invocar los scripts de motor. |
 | `TRANSCRIBE_TIMEOUT_MIN` | `60` | Minutos máximos permitidos para transcribir un solo archivo antes de abortarlo con error. |
+| `PROXY_CONCURRENCY` | `min(4, núcleos-2)` | Transcodes de proxy simultáneos (etapa 5B). |
+| `ASSEMBLY_BACKEND` | `remotion` | Backend de ensamblaje de las etapas 9/11: `remotion` (headless) o `palmier` (stub). |
 
 ### Setup local (macOS / Apple Silicon, motor `mlx` por defecto)
 
@@ -498,16 +568,27 @@ GET /api/jobs/<jobId>/frames/<clip sin extensión>/frame_SSSS.jpg
 - `src/lib/silence-stage.ts` — etapa 5A: descubre los clips `leccion` de `plan/structure.json`, corre `ffmpeg silencedetect` sobre cada uno (secuencial) y escribe `probe/silence.json`, con `skipped`/`shrinkRatio` distintos según `kind` demo/normal (ver [Etapa 5](#etapa-5-preparación-de-corte-5a5b5c)).
 - `src/lib/proxy-stage.ts` — etapa 5B: transcodifica en paralelo (mini-pool, `PROXY_CONCURRENCY`) los clips `leccion` a proxies de edición 1080p30 h264/aac en `assets/proxies/`, saltando los que ya estén al día; persiste `progress/prep-progress.json` por clip.
 - `src/lib/cuts-stage.ts` — etapa 5C: calcula, por cada segmento de cada lección, los cortes deterministas a partir de los huecos entre segmentos de Whisper (con padding, redondeo conservador y clamp al segmento) y escribe `plan/cuts/<lessonId>.json`. La pieza más inspeccionable del pipeline — ver comentarios extensos en el archivo.
+- `src/lib/assembly/types.ts` — el CONTRATO del ensamblaje: `AssemblyBackend`, `LessonAssemblyPlan`, `TimelineEntry`, `IntroProps`. No menciona Remotion ni ffmpeg.
+- `src/lib/assembly/plan.ts` — planner puro: traduce `structure.json` + `plan/cuts/` + `assets/proxies/` a un `LessonAssemblyPlan` por clase (resuelve clip→proxy, expande los `keep` a timeline en frames, calcula `expectedFrames` y la huella de entradas). No renderiza nada.
+- `src/lib/assembly/verify.ts` — definición compartida de "render completo": `ffprobe` con `-count_packets` contra `expectedFrames`, y promoción atómica `.tmp.mp4` → final. Común a todos los backends a propósito.
+- `src/lib/assembly/index.ts` — registry: elige el backend por `ASSEMBLY_BACKEND` (único lugar del código que nombra implementaciones concretas).
+- `src/lib/assembly/remotion/backend.ts` — backend por defecto: bundle por job (con `symlinkPublicDir` para no copiar los proxies), `selectComposition` + `renderMedia` a `.tmp.mp4`, y verificación vía `verify.ts`.
+- `src/lib/assembly/palmier/backend.ts` — stub del modo de refinamiento manual futuro: satisface la interfaz y lanza `NotImplemented`.
+- `src/lib/assembly-stage.ts` — etapas 9 y 11 orquestadas y AGNÓSTICAS del backend: intro + ensamblaje por clase, progreso X/N en `progress/assembly-progress.json`, sidecars, política de re-corrida y `job.json`.
+- `remotion/Root.tsx` / `Intro.tsx` / `Lesson.tsx` / `index.ts` — composiciones de Remotion (intro determinista y concatenación de tramos `keep`), registradas para el bundle headless.
+- `remotion/fonts/` — Poppins (`.ttf`, SIL OFL) versionada + carga perezosa vía `@remotion/fonts`, para que los renders no dependan de la red.
 - `scripts/setup-python.sh` — crea `.venv-whisper/` e instala `mlx-whisper`.
 - `scripts/transcribe_mlx.py` — script del motor `mlx-whisper` (macOS/Apple Silicon).
 - `scripts/transcribe_faster.py` — script del motor `faster-whisper` (producción Windows/NVIDIA).
 - `src/app/page.tsx` — pantalla única de subida: sube el ZIP (sin más input manual) y redirige a `/jobs/<id>`.
 - `src/app/jobs/[jobId]/page.tsx` — vista de job: pollea el estado, muestra progreso por etapa y por archivo, el resumen final con `master.txt`, los botones de re-transcribir/re-muestrear frames/re-generar estructura/re-preparar corte, la galería de miniaturas por clip a partir de `frames/manifest.json`, y la sección de resultados de preparación (silencio/shrink por clip, cortes por lección) a partir de `silence`/`cuts`.
 - `src/app/api/ingest/route.ts` — recibe el ZIP, crea el job, corre la ingesta (etapa 1) y dispara `runPipeline` (etapas 2 en adelante) en background.
-- `src/app/api/jobs/[jobId]/route.ts` — expone `{ job, media, progress, summary, manifest, structure, audit, verdicts, decisiones, silence, cuts, prepProgress }` de un job para que la UI pollee un único endpoint.
+- `src/app/api/jobs/[jobId]/route.ts` — expone `{ job, media, progress, summary, manifest, structure, audit, verdicts, decisiones, silence, cuts, prepProgress, assemblyProgress, renders }` de un job para que la UI pollee un único endpoint.
 - `src/app/api/jobs/[jobId]/transcribe/route.ts` — re-corre el pipeline completo (probe + transcripción + muestreo de frames) sobre un job existente, sin re-ingerir.
 - `src/app/api/jobs/[jobId]/frames/route.ts` — re-corre (o corre por primera vez) solo la etapa de muestreo de frames de un job ya transcrito, sin volver a probar ni re-transcribir.
 - `src/app/api/jobs/[jobId]/plan/route.ts` — re-corre (o corre por primera vez) solo la etapa de plan (agente autónomo) de un job ya muestreado, sin volver a probar, transcribir ni re-muestrear frames.
 - `src/app/api/jobs/[jobId]/prep/route.ts` — re-corre (o corre por primera vez) solo las etapas de preparación (5A/5B/5C) de un job ya planeado, sin volver a probar, transcribir, re-muestrear frames ni re-planear.
+- `src/app/api/jobs/[jobId]/assemble/route.ts` — corre (o re-corre) las etapas 9 y 11 de un job ya preparado; acepta `{ "force": true }` para re-renderizar todo. No elige backend: eso lo decide `ASSEMBLY_BACKEND` en el servidor.
+- `src/app/api/jobs/[jobId]/render/[...path]/route.ts` — sirve un MP4 ensamblado con soporte de HTTP Range (206), anti path-traversal, y solo si tiene sidecar `complete`.
 - `src/app/api/jobs/[jobId]/frames/[...path]/route.ts` — sirve un JPG individual de `frames/<id>/` como `image/jpeg`, con protección anti path-traversal.
 - `src/app/api/jobs/[jobId]/master/route.ts` — sirve `transcripts/master.txt` como texto plano (404 si no existe todavía).

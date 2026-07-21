@@ -3,8 +3,9 @@
  * progreso de transcripción, la metadata de probe, el resumen final, el
  * manifest de frames, los artefactos de la etapa de plan (structure, audit,
  * verdicts y decisiones.md) y los artefactos de las etapas de preparación
- * (5A/5B/5C: silence, cuts y prepProgress) si ya existen, para que la UI
- * pueda pollear un único endpoint.
+ * (5A/5B/5C: silence, cuts y prepProgress) y de las etapas 9/11 (intros y
+ * ensamblaje: assemblyProgress y los sidecars de render) si ya existen, para
+ * que la UI pueda pollear un único endpoint.
  *
  * Nota: esta ruta es solo lectura. Nunca toca jobs/<id>/source/, que es
  * inmutable una vez creada la ingesta (ver invariante en src/lib/jobs.ts).
@@ -13,6 +14,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import {
+  readAssemblyProgressJson,
   readAuditJson,
   readCutsFiles,
   readDecisionesMd,
@@ -21,6 +23,7 @@ import {
   readMediaJson,
   readPrepProgressJson,
   readProgressJson,
+  readRenderSidecars,
   readSilenceJson,
   readStructureJson,
   readVerdictsJson,
@@ -67,6 +70,8 @@ export async function GET(
       silence,
       cuts,
       prepProgress,
+      assemblyProgress,
+      renders,
     ] = await Promise.all([
       readMediaJson(jobId),
       readProgressJson(jobId),
@@ -87,6 +92,12 @@ export async function GET(
       readSilenceJson(jobId),
       readCutsFiles(jobId),
       readPrepProgressJson(jobId),
+      // Artefactos de las etapas 9/11 (intros + ensamblaje): el progreso por
+      // clase y los sidecars de los renders YA VERIFICADOS como completos.
+      // La UI usa `renders` (no la existencia del .mp4) para decidir qué se
+      // puede reproducir.
+      readAssemblyProgressJson(jobId),
+      readRenderSidecars(jobId),
     ]);
 
     return NextResponse.json({
@@ -102,6 +113,8 @@ export async function GET(
       silence,
       cuts: cuts.length > 0 ? cuts : null,
       prepProgress,
+      assemblyProgress,
+      renders: renders.length > 0 ? renders : null,
     });
   } catch {
     return NextResponse.json(

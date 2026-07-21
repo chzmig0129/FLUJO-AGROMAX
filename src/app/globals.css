@@ -677,3 +677,60 @@ textarea:focus {
   margin: 0.25rem 0 0.25rem 1.25rem;
   font-size: 0.85rem;
 }
+
+/* Sección de clases ensambladas (etapas 9 + 11, jobs/[jobId]) */
+.assembly-section {
+  margin-top: 1.25rem;
+}
+
+.assembly-progress {
+  margin: 0.5rem 0 0.75rem;
+  font-weight: 600;
+}
+
+/* Grilla de tarjetas por clase: una columna en móvil, dos desde tablet. */
+.assembly-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.assembly-card {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.assembly-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.assembly-card-id {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+}
+
+.assembly-card-status {
+  margin: 0;
+  color: var(--color-muted);
+}
+
+.assembly-card-meta {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.8rem;
+}
+
+/* El video ocupa el ancho de la tarjeta manteniendo el 16:9 del render. */
+.assembly-video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 6px;
+}

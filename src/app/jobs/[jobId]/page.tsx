@@ -45,12 +45,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import type {
+  AssemblyProgressJson,
   AuditJson,
   CutsFile,
   FramesManifest,
   JobJson,
   MediaInfo,
   ProgressJson,
+  RenderSidecar,
   SilenceJson,
   StructureJson,
   Verdict,
@@ -81,12 +83,22 @@ interface JobApiResponse {
   silence: SilenceJson | null;
   cuts: CutsFile[] | null;
   prepProgress: ProgressJson | null;
+  assemblyProgress: AssemblyProgressJson | null;
+  /** Sidecars de los renders YA VERIFICADOS como completos (o null si no hay). */
+  renders: RenderSidecar[] | null;
 }
 
 const POLL_INTERVAL_MS = 2000;
 
 /** Etapas mostradas en el stepper, en orden. */
-type StepKey = "ingest" | "probe" | "transcribe" | "sample" | "plan" | "prep";
+type StepKey =
+  | "ingest"
+  | "probe"
+  | "transcribe"
+  | "sample"
+  | "plan"
+  | "prep"
+  | "assemble";
 
 /**
  * Deriva el estado de cada etapa del stepper ('done' | 'active' | 'pending' |
@@ -108,6 +120,7 @@ function stepStatus(
       "sample",
       "plan",
       "prep",
+      "assemble",
     ];
     const failedIndex = order.findIndex((s) => s === step);
     // No sabemos con certeza en qué etapa fue el error; usamos una heurística
@@ -161,10 +174,21 @@ function stepStatus(
     return "pending"; // cualquier etapa previa a 'planning'
   }
 
-  // step === 'prep'
-  if (status === "preparing") return "active";
-  if (status === "prepared") return "done";
-  return "pending"; // cualquier etapa previa a 'preparing'
+  if (step === "prep") {
+    if (status === "preparing") return "active";
+    if (
+      status === "prepared" ||
+      status === "assembling" ||
+      status === "assembled"
+    )
+      return "done";
+    return "pending"; // cualquier etapa previa a 'preparing'
+  }
+
+  // step === 'assemble' (etapas 9 + 11: intros + ensamblaje headless)
+  if (status === "assembling") return "active";
+  if (status === "assembled") return "done";
+  return "pending"; // cualquier etapa previa a 'assembling'
 }
 
 const STEP_LABELS: Record<StepKey, string> = {
@@ -174,6 +198,7 @@ const STEP_LABELS: Record<StepKey, string> = {
   sample: "Muestreando frames",
   plan: "Estructurando (agente)",
   prep: "Preparando corte",
+  assemble: "Ensamblando clases",
 };
 
 /** Etiqueta en español del veredicto del agente para el badge de cada clip. */
@@ -228,6 +253,8 @@ export default function JobPage() {
   const [planError, setPlanError] = useState<string | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [prepError, setPrepError] = useState<string | null>(null);
+  const [assembling, setAssembling] = useState(false);
+  const [assembleError, setAssembleError] = useState<string | null>(null);
   const [showMaster, setShowMaster] = useState(false);
   const [masterText, setMasterText] = useState<string | null>(null);
   const [masterLoading, setMasterLoading] = useState(false);
@@ -293,6 +320,7 @@ export default function JobPage() {
         status === "sampled" ||
         status === "planned" ||
         status === "prepared" ||
+        status === "assembled" ||
         status === "error" ||
         stableWithoutManifest;
       if (!finished) {
@@ -451,6 +479,50 @@ export default function JobPage() {
     }
   }, [jobId, startPolling]);
 
+  /**
+   * Dispara (o re-dispara) las etapas 9 y 11 (intros + ensamblaje headless)
+   * vía POST /api/jobs/<id>/assemble. `force` re-renderiza todas las clases
+   * aunque ya tengan un render verificado y vigente; sin force, las clases
+   * cuyas entradas no cambiaron se saltan.
+   *
+   * La UI no elige backend: eso lo decide ASSEMBLY_BACKEND en el servidor.
+   */
+  const handleAssemble = useCallback(
+    async (force = false) => {
+      setAssembleError(null);
+      setAssembling(true);
+      try {
+        const res = await fetch(`/api/jobs/${jobId}/assemble`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ force }),
+        });
+        if (res.status === 409) {
+          setAssembleError("El proyecto ya se está procesando.");
+          return;
+        }
+        if (res.status === 400) {
+          const body = await res.json().catch(() => null);
+          setAssembleError(
+            body?.error ?? "El proyecto todavía no puede ensamblarse."
+          );
+          return;
+        }
+        if (!res.ok) {
+          setAssembleError("No se pudo iniciar el ensamblaje.");
+          return;
+        }
+        // Reanuda el polling de inmediato para reflejar el nuevo status.
+        startPolling();
+      } catch {
+        setAssembleError("No se pudo iniciar el ensamblaje.");
+      } finally {
+        setAssembling(false);
+      }
+    },
+    [jobId, startPolling]
+  );
+
   const handleToggleMaster = useCallback(async () => {
     const next = !showMaster;
     setShowMaster(next);
@@ -501,6 +573,8 @@ export default function JobPage() {
     silence,
     cuts,
     prepProgress,
+    assemblyProgress,
+    renders,
   } = data;
   const isError = job.status === "error";
   // El job puede reintentar solo el plan (sin re-transcribir) si falló
@@ -526,7 +600,9 @@ export default function JobPage() {
     job.status === "planning" ||
     job.status === "planned" ||
     job.status === "preparing" ||
-    job.status === "prepared";
+    job.status === "prepared" ||
+    job.status === "assembling" ||
+    job.status === "assembled";
   // Compat jobs viejos: sin manifest y sin estar corriendo el muestreo, se
   // ofrece el botón para dispararlo manualmente en vez de asumir que sigue
   // "procesando".
@@ -542,6 +618,15 @@ export default function JobPage() {
   // "Re-preparar corte".
   const canPrep = job.status === "planned" && cuts === null;
   const canReprep = cuts !== null;
+  // El ensamblaje se ofrece desde que hay cortes en disco: 'prepared' (o
+  // 'assembling'/'assembled' para re-ensamblar), y también en 'error' si los
+  // cortes ya existen (misma tolerancia que hasAssemblyPrerequisites).
+  const canAssemble =
+    cuts !== null &&
+    (job.status === "prepared" ||
+      job.status === "assembling" ||
+      job.status === "assembled" ||
+      job.status === "error");
 
   const progressFiles = progress?.files ?? {};
   const totalFiles = job.files.length;
@@ -552,6 +637,26 @@ export default function JobPage() {
   // Sub-progreso de proxies (5B) dentro de la etapa 'preparing': cuenta
   // cuántos clips ya terminaron (done o error) sobre el total de clips que
   // necesitan proxy, leído de progress/prep-progress.json.
+  // Progreso X/N del ensamblaje (etapas 9+11): una clase cuenta como
+  // terminada cuando quedó 'done', 'skipped' (ya tenía render vigente) o
+  // 'error'. Se lee de progress/assembly-progress.json.
+  const assemblyLessons = Object.entries(assemblyProgress?.lessons ?? {});
+  const assemblyTotal = assemblyProgress?.total ?? 0;
+  const assemblyDone = assemblyLessons.filter(
+    ([, l]) => l.status === "done" || l.status === "skipped" || l.status === "error"
+  ).length;
+  // Solo se ofrece reproducir lo que tiene sidecar 'complete': la existencia
+  // del .mp4 nunca alcanza (ver assembly/verify.ts).
+  const completedRenders = renders ?? [];
+  const rendersByLesson = new Map(completedRenders.map((r) => [r.lessonId, r]));
+  // Título legible por lección, para las tarjetas de reproducción.
+  const lessonTitles = new Map<string, string>();
+  for (const module of structure?.modules ?? []) {
+    for (const lesson of module.lessons) {
+      lessonTitles.set(lesson.id, lesson.title);
+    }
+  }
+
   const prepFiles = prepProgress?.files ?? {};
   const prepTotalFiles = Object.keys(prepFiles).length;
   const prepDoneFiles = Object.values(prepFiles).filter(
@@ -616,7 +721,15 @@ export default function JobPage() {
 
       <ol className="stepper">
         {(
-          ["ingest", "probe", "transcribe", "sample", "plan", "prep"] as StepKey[]
+          [
+            "ingest",
+            "probe",
+            "transcribe",
+            "sample",
+            "plan",
+            "prep",
+            "assemble",
+          ] as StepKey[]
         ).map((step) => {
           const status = stepStatus(step, job.status);
           return (
@@ -635,6 +748,10 @@ export default function JobPage() {
                   job.status === "preparing" &&
                   prepTotalFiles > 0 &&
                   ` (proxies ${prepDoneFiles}/${prepTotalFiles})`}
+                {step === "assemble" &&
+                  job.status === "assembling" &&
+                  assemblyTotal > 0 &&
+                  ` (${assemblyDone}/${assemblyTotal})`}
               </span>
             </li>
           );
@@ -745,6 +862,18 @@ export default function JobPage() {
                     : "Preparar corte (silencio + proxies + cortes)"}
               </button>
             )}
+            {canAssemble && (
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={() => handleAssemble(false)}
+                disabled={assembling || job.status === "assembling"}
+              >
+                {assembling || job.status === "assembling"
+                  ? "Ensamblando…"
+                  : "Ensamblar clases (intros + corte)"}
+              </button>
+            )}
           </div>
           {retranscribeError && (
             <p className="stepper-error-msg">{retranscribeError}</p>
@@ -752,6 +881,9 @@ export default function JobPage() {
           {sampleError && <p className="stepper-error-msg">{sampleError}</p>}
           {planError && <p className="stepper-error-msg">{planError}</p>}
           {prepError && <p className="stepper-error-msg">{prepError}</p>}
+          {assembleError && (
+            <p className="stepper-error-msg">{assembleError}</p>
+          )}
 
           <div>
             <button
@@ -1122,6 +1254,139 @@ export default function JobPage() {
                     );
                   })}
                 </div>
+              )}
+            </section>
+          )}
+
+          {(assemblyProgress || completedRenders.length > 0) && (
+            <section className="assembly-section">
+              <h2>Clases ensambladas</h2>
+              <p className="audit-hint">
+                Etapas 9 y 11: intro por clase + concatenación de los tramos
+                &quot;keep&quot; (el corte de silencios ya calculado), en
+                1080p/30. Solo se listan renders VERIFICADOS como completos
+                (frames contados con ffprobe contra los esperados): un archivo
+                a medio escribir nunca aparece acá.
+                {assemblyProgress?.backend
+                  ? ` Backend: ${assemblyProgress.backend}.`
+                  : ""}
+              </p>
+
+              {assemblyTotal > 0 && (
+                <p className="assembly-progress">
+                  {assemblyDone}/{assemblyTotal} clases
+                  {job.status === "assembling" ? " (ensamblando…)" : ""}
+                </p>
+              )}
+
+              <div className="assembly-grid">
+                {(assemblyLessons.length > 0
+                  ? assemblyLessons.map(([lessonId, lesson]) => ({
+                      lessonId,
+                      title: lesson.title,
+                      status: lesson.status,
+                      frame: lesson.frame,
+                      totalFrames: lesson.totalFrames,
+                      error: lesson.error,
+                    }))
+                  : completedRenders.map((r) => ({
+                      lessonId: r.lessonId,
+                      title: lessonTitles.get(r.lessonId) ?? r.lessonId,
+                      status: "done" as const,
+                      frame: r.actualFrames,
+                      totalFrames: r.expectedFrames,
+                      error: undefined,
+                    }))
+                ).map((lesson) => {
+                  const render = rendersByLesson.get(lesson.lessonId);
+                  const pct =
+                    lesson.totalFrames && lesson.totalFrames > 0
+                      ? Math.round(
+                          ((lesson.frame ?? 0) / lesson.totalFrames) * 100
+                        )
+                      : 0;
+
+                  return (
+                    <div className="assembly-card" key={lesson.lessonId}>
+                      <div className="assembly-card-head">
+                        <strong>{lesson.title}</strong>
+                        <span className="assembly-card-id">
+                          {lesson.lessonId}
+                        </span>
+                      </div>
+
+                      {lesson.status === "error" && (
+                        <p className="stepper-error-msg">
+                          {lesson.error ?? "Falló el ensamblaje de esta clase."}
+                        </p>
+                      )}
+
+                      {(lesson.status === "intro" ||
+                        lesson.status === "assembling" ||
+                        lesson.status === "pending") && (
+                        <p className="assembly-card-status">
+                          <span className="spinner spinner-inline" />{" "}
+                          {lesson.status === "intro"
+                            ? "renderizando intro…"
+                            : lesson.status === "assembling"
+                              ? `ensamblando… ${pct}%`
+                              : "en cola"}
+                        </p>
+                      )}
+
+                      {/* La reproducción depende del sidecar, no del status:
+                          un render de una corrida anterior sigue siendo
+                          reproducible aunque esta corrida todavía no llegue
+                          a esta clase. */}
+                      {render ? (
+                        <>
+                          <video
+                            className="assembly-video"
+                            controls
+                            preload="metadata"
+                            src={`/api/jobs/${jobId}/render/${lesson.lessonId}.mp4`}
+                          />
+                          <p className="assembly-card-meta">
+                            {formatDuration(render.durationSeconds)} ·{" "}
+                            {render.width}x{render.height} · {render.fps}fps ·{" "}
+                            {render.actualFrames} frames ·{" "}
+                            {(render.sizeBytes / (1024 * 1024)).toFixed(1)} MB
+                            {lesson.status === "skipped"
+                              ? " · reutilizado (sin cambios)"
+                              : ""}
+                          </p>
+                        </>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {canAssemble && (
+                <div className="stepper-actions">
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    onClick={() => handleAssemble(false)}
+                    disabled={assembling || job.status === "assembling"}
+                  >
+                    {assembling || job.status === "assembling"
+                      ? "Ensamblando…"
+                      : "Ensamblar clases (intros + corte)"}
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    onClick={() => handleAssemble(true)}
+                    disabled={assembling || job.status === "assembling"}
+                    title="Ignora los renders existentes y vuelve a renderizar todas las clases"
+                  >
+                    Re-ensamblar todo
+                  </button>
+                </div>
+              )}
+              {assembleError && (
+                <p className="stepper-error-msg">{assembleError}</p>
               )}
             </section>
           )}

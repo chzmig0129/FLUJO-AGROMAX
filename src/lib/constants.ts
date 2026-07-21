@@ -40,3 +40,32 @@ export const CUT_PADDING_SECONDS = 0.18;
  * se descartan (etapa 5C).
  */
 export const MIN_CUT_FRAMES = 3;
+
+/* ------------------------------------------------------------------ *
+ * Etapas 9 (intros) y 11 (ensamblaje headless)
+ * ------------------------------------------------------------------ */
+
+/** Duración fija del intro de cada clase, en frames (5 s a 30 fps). */
+export const INTRO_DURATION_FRAMES = 150;
+
+/** Verde primario de la plataforma (marca AgroMax). */
+export const BRAND_GREEN = "#22C55E";
+
+/** Verde secundario/oscuro de la plataforma, usado en degradados y acentos. */
+export const BRAND_GREEN_DARK = "#16A34A";
+
+/** Fondo oscuro base del intro. */
+export const BRAND_INK = "#08140C";
+
+/**
+ * Nota tipográfica: la familia del intro (Poppins + fallbacks) se define en
+ * remotion/fonts/poppins.ts, junto a la carga de los .ttf versionados.
+ */
+
+/**
+ * Tolerancia (en frames) al comparar los frames realmente presentes en un
+ * render contra los esperados. No es holgura gratuita: los muxers pueden
+ * cerrar el archivo con un paquete de diferencia según cómo cierren el GOP.
+ * Más allá de esto, el archivo se considera truncado y el render FALLA.
+ */
+export const RENDER_FRAME_TOLERANCE = 2;

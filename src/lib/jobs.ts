@@ -15,6 +15,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type {
+  AssemblyProgressJson,
   AuditJson,
   CutsFile,
   FramesManifest,
@@ -22,6 +23,7 @@ import type {
   JobStatus,
   MediaInfo,
   ProgressJson,
+  RenderSidecar,
   SilenceJson,
   StageTiming,
   StructureJson,
@@ -116,6 +118,38 @@ export function proxiesDir(id: string): string {
   return path.join(assetsDir(id), "proxies");
 }
 
+/** Ruta absoluta al subdirectorio de intros renderizados de un job (etapa 9). */
+export function introsDir(id: string): string {
+  return path.join(assetsDir(id), "intros");
+}
+
+/** Ruta absoluta a assets/intros/<lessonId>.mp4 de un job (etapa 9). */
+export function introPath(id: string, lessonId: string): string {
+  return path.join(introsDir(id), `${lessonId}.mp4`);
+}
+
+/**
+ * Ruta absoluta al subdirectorio de renders finales de un job (etapa 11).
+ * Es el ÚNICO lugar donde el ensamblaje escribe video terminado; source/ y
+ * assets/proxies/ nunca se tocan.
+ */
+export function renderDir(id: string): string {
+  return path.join(jobPath(id), "render");
+}
+
+/** Ruta absoluta a render/<lessonId>.mp4 de un job (etapa 11). */
+export function renderPath(id: string, lessonId: string): string {
+  return path.join(renderDir(id), `${lessonId}.mp4`);
+}
+
+/**
+ * Ruta absoluta al sidecar de verificación render/<lessonId>.json — la
+ * fuente de verdad sobre "este render está completo" (ver RenderSidecar).
+ */
+export function renderSidecarPath(id: string, lessonId: string): string {
+  return path.join(renderDir(id), `${lessonId}.json`);
+}
+
 /** Ruta absoluta a probe/silence.json de un job (etapa 5A). */
 export function silenceJsonPath(id: string): string {
   return path.join(probeDir(id), "silence.json");
@@ -134,6 +168,11 @@ function cutsFilePath(id: string, lessonId: string): string {
 /** Ruta absoluta a progress/prep-progress.json de un job (etapas 5A/5B/5C). */
 export function prepProgressJsonPath(id: string): string {
   return path.join(progressDir(id), "prep-progress.json");
+}
+
+/** Ruta absoluta a progress/assembly-progress.json de un job (etapas 9 y 11). */
+export function assemblyProgressJsonPath(id: string): string {
+  return path.join(progressDir(id), "assembly-progress.json");
 }
 
 /**
@@ -491,6 +530,88 @@ export async function readPrepProgressJson(
 }
 
 /**
+ * Escribe (o sobrescribe) progress/assembly-progress.json de un job (etapas
+ * 9 y 11). Crea progress/ de forma recursiva si todavía no existe.
+ */
+export async function writeAssemblyProgressJson(
+  id: string,
+  progress: AssemblyProgressJson
+): Promise<void> {
+  await fs.mkdir(progressDir(id), { recursive: true });
+  await fs.writeFile(
+    assemblyProgressJsonPath(id),
+    JSON.stringify(progress, null, 2),
+    "utf-8"
+  );
+}
+
+/**
+ * Lee progress/assembly-progress.json de un job. Devuelve null si todavía no
+ * existe en vez de lanzar un error.
+ */
+export async function readAssemblyProgressJson(
+  id: string
+): Promise<AssemblyProgressJson | null> {
+  try {
+    const raw = await fs.readFile(assemblyProgressJsonPath(id), "utf-8");
+    return JSON.parse(raw) as AssemblyProgressJson;
+  } catch {
+    return null;
+  }
+}
+
+/** Escribe el sidecar de verificación render/<lessonId>.json de una clase. */
+export async function writeRenderSidecar(
+  id: string,
+  sidecar: RenderSidecar
+): Promise<void> {
+  await fs.mkdir(renderDir(id), { recursive: true });
+  await fs.writeFile(
+    renderSidecarPath(id, sidecar.lessonId),
+    JSON.stringify(sidecar, null, 2),
+    "utf-8"
+  );
+}
+
+/**
+ * Lee el sidecar de verificación de una clase. Devuelve null si no existe o
+ * si no está en estado 'complete' (un sidecar corrupto o de otra versión NO
+ * debe hacer pasar por bueno un render a medio escribir).
+ */
+export async function readRenderSidecar(
+  id: string,
+  lessonId: string
+): Promise<RenderSidecar | null> {
+  try {
+    const raw = await fs.readFile(renderSidecarPath(id, lessonId), "utf-8");
+    const parsed = JSON.parse(raw) as RenderSidecar;
+    return parsed.status === "complete" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Lee todos los sidecars de render presentes en render/ de un job. */
+export async function readRenderSidecars(
+  id: string
+): Promise<RenderSidecar[]> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(renderDir(id));
+  } catch {
+    return [];
+  }
+
+  const results: RenderSidecar[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    const sidecar = await readRenderSidecar(id, path.basename(entry, ".json"));
+    if (sidecar) results.push(sidecar);
+  }
+  return results;
+}
+
+/**
  * Mergea el timing existente de una etapa con un patch parcial (por ejemplo
  * solo finishedAt), sin perder el startedAt ya guardado. Si no hay timing
  * previo ni el patch trae startedAt, no hay nada consistente que guardar.
@@ -532,6 +653,8 @@ export async function updateJobStatus(
       silence?: { startedAt?: string; finishedAt?: string };
       proxies?: { startedAt?: string; finishedAt?: string };
       cuts?: { startedAt?: string; finishedAt?: string };
+      intros?: { startedAt?: string; finishedAt?: string };
+      assembly?: { startedAt?: string; finishedAt?: string };
     };
     errorMessage?: string;
   }
@@ -559,6 +682,11 @@ export async function updateJobStatus(
           extra.stages.proxies
         ),
         cuts: mergeStageTiming(current.stages?.cuts, extra.stages.cuts),
+        intros: mergeStageTiming(current.stages?.intros, extra.stages.intros),
+        assembly: mergeStageTiming(
+          current.stages?.assembly,
+          extra.stages.assembly
+        ),
       }
     : current.stages;
 

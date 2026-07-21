@@ -10,9 +10,11 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { runAssemblyStage } from "./assembly-stage";
 import { runCutsStage } from "./cuts-stage";
 import { runFramesStage } from "./frames-stage";
 import {
+  cutsDir,
   readFramesManifest,
   readJobJson,
   structureJsonPath,
@@ -374,5 +376,87 @@ async function executePrepOnly(jobId: string): Promise<void> {
         ? err.message
         : "Error desconocido en la preparación";
     await updateJobStatus(jobId, "error", { errorMessage });
+  }
+}
+
+/**
+ * Verifica (de forma tolerante) si un job tiene los prerequisitos reales del
+ * ensamblaje ya en disco: plan/cuts/ con al menos un archivo de cortes.
+ * structure.json solo no alcanza: sin cortes no hay tramos "keep" que
+ * concatenar.
+ */
+export async function hasAssemblyPrerequisites(
+  jobId: string
+): Promise<boolean> {
+  try {
+    const entries = await fs.readdir(cutsDir(jobId));
+    return entries.some((entry) => entry.endsWith(".json"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Corre solo las etapas 9 (intros) y 11 (ensamblaje headless) de un job ya
+ * preparado. Reutiliza el mismo registro `running` que el resto del
+ * pipeline, para que no haya dos corridas del mismo job en paralelo sin
+ * importar qué etapa las disparó.
+ *
+ * `force` re-renderiza todas las clases aunque ya tengan un render
+ * verificado y vigente.
+ */
+export function runAssembleOnly(
+  jobId: string,
+  options?: { force?: boolean }
+): Promise<void> {
+  const existing = running.get(jobId);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = executeAssembleOnly(jobId, options).finally(() => {
+    running.delete(jobId);
+  });
+
+  running.set(jobId, promise);
+  return promise;
+}
+
+/** Estados desde los que tiene sentido (re)correr el ensamblaje. */
+const ASSEMBLY_READY_STATUSES: JobStatus[] = [
+  "prepared",
+  "assembling",
+  "assembled",
+];
+
+/** Ejecuta el ensamblaje validando el status previo del job. */
+async function executeAssembleOnly(
+  jobId: string,
+  options?: { force?: boolean }
+): Promise<void> {
+  try {
+    const current = await readJobJson(jobId);
+    const readyByStatus = ASSEMBLY_READY_STATUSES.includes(current.status);
+    const readyByErrorWithPrereqs =
+      current.status === "error" && (await hasAssemblyPrerequisites(jobId));
+
+    if (!readyByStatus && !readyByErrorWithPrereqs) {
+      throw new Error(
+        `No se puede ensamblar: el job "${jobId}" debe estar preparado primero (status actual: "${current.status}")`
+      );
+    }
+
+    await runAssemblyStage(jobId, options);
+  } catch (err) {
+    // runAssemblyStage ya deja el detalle por clase en job.json y en
+    // assembly-progress.json; acá solo se garantiza que el job quede en
+    // 'error' aunque la falla haya sido antes de arrancar (planner, backend
+    // no disponible, etc.).
+    const errorMessage =
+      err instanceof Error ? err.message : "Error desconocido en el ensamblaje";
+    const current = await readJobJson(jobId).catch(() => null);
+    if (!current || current.status !== "error") {
+      await updateJobStatus(jobId, "error", { errorMessage });
+    }
   }
 }
