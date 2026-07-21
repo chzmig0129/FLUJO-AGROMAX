@@ -1,11 +1,12 @@
-# AgroMax — Ingesta, Probe, Transcripción y Muestreo de Frames (Etapas 1-3.5)
+# AgroMax — Ingesta, Probe, Transcripción, Muestreo de Frames y Plan autónomo (Etapas 1-4)
 
-AgroMax es un pipeline que convierte video crudo en un curso online. Este repositorio implementa las primeras **tres etapas y media**:
+AgroMax es un pipeline que convierte video crudo en un curso online. Este repositorio implementa las primeras **cuatro etapas**:
 
 1. **Ingesta**: recibe un ZIP de videos crudos, lo extrae y analiza cada archivo con `ffprobe`.
 2. **Probe**: mide metadata técnica determinista de cada video (resolución, fps, codec, audio) y decide si necesitará transcodificación.
 3. **Transcripción**: transcribe cada video con Whisper (motor intercambiable), con timestamps por palabra, detecta si el clip tiene narración real o es B-roll mudo, y arma un resumen legible del proyecto completo.
-4. **Muestreo de frames** (etapa 3.5): extrae JPGs de referencia de cada clip con `ffmpeg`, con una estrategia de muestreo distinta según el clip tenga narración o sea B-roll, y arma un manifest por job listo para que una etapa futura (generación del curso) elija qué frames usar.
+3.5. **Muestreo de frames**: extrae JPGs de referencia de cada clip con `ffmpeg`, con una estrategia de muestreo distinta según el clip tenga narración o sea B-roll, y arma un manifest por job listo para que la etapa 4 elija qué frames usar.
+4. **Plan (filtro editorial y estructura autónoma)**: un agente Claude autónomo (sin aprobación humana en el camino) lee la transcripción completa y los frames de referencia, decide un veredicto por clip (`leccion`/`broll`/`descartar`/`otro_curso`), arma la estructura del curso (módulos → lecciones → segmentos) y escribe un registro de auditoría completo para revisión humana **posterior**. Ver [Etapa 4: agente de plan autónomo](#etapa-4-agente-de-plan-autónomo).
 
 Las etapas siguientes del pipeline (edición, generación del curso, publicación, etc.) todavía no existen y no forman parte de este repo.
 
@@ -15,6 +16,7 @@ Es una app Next.js full-stack, sin base de datos y sin autenticación: el estado
 
 - Node.js 20 o superior.
 - Python 3.12 y [`uv`](https://docs.astral.sh/uv/) para el motor de transcripción (ver [Setup del motor de transcripción](#setup-del-motor-de-transcripción)).
+- `ANTHROPIC_API_KEY` configurada en `.env.local` para que corra la etapa 4 (el agente de plan). Next.js carga `.env.local` automáticamente al `process.env` del server; sin esta variable, `runPlanStage` lanza un error explícito antes de intentar llamar a la API en vez de dejar que el SDK falle con un mensaje críptico de autenticación (`src/lib/plan-stage.ts`).
 
 No hace falta instalar `ffmpeg` ni `ffprobe` a mano: vienen empaquetados como dependencias de npm (`ffmpeg-static` y `ffprobe-static`) y se instalan junto con el resto del proyecto.
 
@@ -45,7 +47,9 @@ No hay input manual más allá de subir el ZIP: no se pide nombre de proyecto, n
    - **Probe** (`status: "probing"` → `"probed"`): midiendo metadata técnica de cada video.
    - **Transcripción** (`status: "transcribing"` → `"transcribed"`): progreso por archivo (pendiente/transcribiendo/hecho/error), leído de `progress/progress.json`.
    - **Muestreo de frames** (`status: "sampling"` → `"sampled"`): extrayendo los JPGs de referencia de cada clip con `ffmpeg`. Jobs viejos que quedaron en `"transcribed"` sin `frames/manifest.json` (de antes de que existiera esta etapa) muestran en su lugar un botón **"Muestrear frames"** que dispara la etapa manualmente.
-   - Al llegar a `status: "sampled"`: resumen del proyecto (cantidad de videos, duración total, cuáles quedaron marcados como "sin narración"), botones **"Re-transcribir"** (`POST /api/jobs/<id>/transcribe`, vuelve a correr probe + transcripción + frames) y **"Re-muestrear frames"** (`POST /api/jobs/<id>/frames`, solo re-corre la etapa 3.5), botón para ver `master.txt` completo, y una sección **"Frames por clip"** con la galería de miniaturas generadas (ver [Estructura de `jobs/<id>/`](#estructura-de-jobsid)).
+   - **Estructurando (agente)** (`status: "planning"` → `"planned"`): 5º paso del stepper, corriendo el agente autónomo de la etapa 4. Jobs que quedaron en `"sampled"` sin `plan/structure.json` (de antes de que existiera esta etapa) muestran en su lugar un botón **"Generar estructura (agente)"** que dispara la etapa manualmente (`POST /api/jobs/<id>/plan`).
+   - Al llegar a `status: "planned"`: sección **AUDITORÍA** de solo lectura (sin controles de aprobación/bloqueo) con el árbol de estructura del curso, tarjetas de veredicto por clip (con confianza, razón, heurísticas citadas y frames), los apartados (`descartar`/`otro_curso`) y `plan/decisiones.md` renderizado; además botón **"Re-generar"** que vuelve a llamar a `POST /api/jobs/<id>/plan` sin re-transcribir ni re-muestrear. Ver [Etapa 4: agente de plan autónomo](#etapa-4-agente-de-plan-autónomo).
+   - Al llegar a `status: "sampled"` (previo a planear): resumen del proyecto (cantidad de videos, duración total, cuáles quedaron marcados como "sin narración"), botones **"Re-transcribir"** (`POST /api/jobs/<id>/transcribe`, vuelve a correr probe + transcripción + frames) y **"Re-muestrear frames"** (`POST /api/jobs/<id>/frames`, solo re-corre la etapa 3.5), botón para ver `master.txt` completo, y una sección **"Frames por clip"** con la galería de miniaturas generadas (ver [Estructura de `jobs/<id>/`](#estructura-de-jobsid)).
    - Si el pipeline falla en cualquier etapa, `status: "error"` y se muestra `job.errorMessage`.
 
 ## Estructura de `jobs/<id>/`
@@ -71,11 +75,16 @@ jobs/
       manifest.json                # resultado del muestreo: clips + frames extraídos, etapa 3.5
       <clip sin extensión>/
         frame_SSSS.jpg               # JPGs extraídos, ancho 640px, nombrados por segundo (SSSS con padding a 4 dígitos)
+    plan/
+      verdicts.json                 # un veredicto por clip (leccion/broll/descartar/otro_curso), etapa 4
+      structure.json                  # módulos → lecciones → segments del curso principal + apartados, etapa 4
+      audit.json                        # registro de auditoría: modelo, usage, llamadas a frames extra, veredictos con lowConfidence, etapa 4
+      decisiones.md                       # explicación en Markdown de las decisiones del agente, baja confianza primero, etapa 4
 ```
 
 - **`source/` es inmutable**: el ZIP subido se guarda temporalmente como `jobs/<id>/upload.zip`, se extrae a `source/` y luego se borra — nunca queda dentro de `source/`. Ningún código de las etapas posteriores (probe, transcripción, muestreo de frames) escribe, mueve ni borra nada dentro de `source/`; solo lo leen. Esta invariante está documentada en `src/lib/jobs.ts` y se repite explícitamente en `src/lib/frames-stage.ts`.
 
-- **`job.json`** — estado del job a través de las cuatro etapas. El tipo `JobStatus` define: `"ingested"` (ZIP extraído y analizado, etapa 1 lista) → `"probing"` → `"probed"` (etapa 2 lista) → `"transcribing"` → `"transcribed"` (etapa 3 lista) → `"sampling"` → `"sampled"` (etapa 3.5 lista, `frames/` y `frames/manifest.json` generados) → `"error"` (falla irrecuperable en cualquier etapa, con `errorMessage`). También acumula `stages.probe`/`stages.transcribe`/`stages.frames` con `startedAt`/`finishedAt` de cada corrida. Ejemplo:
+- **`job.json`** — estado del job a través de las cinco etapas. El tipo `JobStatus` define: `"ingested"` (ZIP extraído y analizado, etapa 1 lista) → `"probing"` → `"probed"` (etapa 2 lista) → `"transcribing"` → `"transcribed"` (etapa 3 lista) → `"sampling"` → `"sampled"` (etapa 3.5 lista, `frames/` y `frames/manifest.json` generados) → `"planning"` → `"planned"` (etapa 4 lista, `plan/` completo) → `"error"` (falla irrecuperable en cualquier etapa, con `errorMessage`). También acumula `stages.probe`/`stages.transcribe`/`stages.frames`/`stages.plan` con `startedAt`/`finishedAt` de cada corrida. Ejemplo:
 
   ```json
   {
@@ -190,6 +199,79 @@ jobs/
   }
   ```
 
+- **`plan/`** — salida de la etapa 4 (`src/lib/plan/agent.ts`), un objeto único por corrida (borrado y re-escrito por completo al re-planear):
+  - **`verdicts.json`** — un `Verdict` por clip del job: `{ clip, verdict, curso, razon, confianza, heuristicas }`, donde `verdict` es `"leccion" | "broll" | "descartar" | "otro_curso"`, `confianza` es un número entre 0 y 1, y `heuristicas` es la lista de IDs (kebab-case) de secciones de `config/domain-heuristics.md` que influyeron en ese veredicto.
+  - **`structure.json`** — `{ courseTitle, modules, apartados }`: `modules` es la estructura propuesta del curso principal (módulos → lecciones → segmentos, cada segmento con `clip`, `startSeconds`, `endSeconds` y `topic`); `apartados` son los veredictos con `verdict: "descartar"` u `"otro_curso"` (todo lo que quedó fuera del curso principal).
+  - **`audit.json`** — registro de auditoría central de la corrida: `generatedAt`, `model`, `usage` (tokens de entrada/salida/cache), `framesCalls` (cada llamada a `extraer_frames`: clip, parámetros pedidos, frames agregados) y `clips` (un resumen por clip cruzando `verdict`, `confianza`, `lowConfidence` (`confianza < 0.6`), `heuristicas` citadas y `pidioFramesExtra`).
+  - **`decisiones.md`** — documento en Markdown, en español, con las decisiones del agente para revisión humana; si hubo clips con `confianza < 0.6`, la primera sección se titula exactamente `⚠️ Baja confianza` y los lista antes que cualquier otra cosa.
+
+## Etapa 4: agente de plan autónomo
+
+La etapa 4 (`src/lib/plan-stage.ts` → `src/lib/plan/agent.ts`) es un **agente autónomo** que decide, sin aprobación humana en el camino, qué clips se usan, cuáles se descartan y cómo se organiza el material en un curso. La filosofía es explícita: **el humano audita el resultado después** (leyendo `plan/decisiones.md` y la vista de auditoría solo-lectura de `/jobs/[jobId]`), no aprueba paso a paso mientras el agente trabaja. No hay ninguna tool de "pedir confirmación humana"; la única salida posible del agente es su entrega final.
+
+### Modelo y configuración del agente
+
+El agente corre con el SDK oficial de Anthropic (`@anthropic-ai/sdk`, `client.beta.messages.toolRunner`) sobre:
+
+- **Modelo**: `claude-opus-4-8` (constante `MODEL` en `src/lib/plan/agent.ts`).
+- **Thinking**: `{ type: "adaptive" }`.
+- **Effort**: `output_config: { effort: "high" }`.
+- **Tools**: dos tools en formato "strict" de Anthropic (`additionalProperties: false`, `required` completo — ver `src/lib/plan/schemas.ts`):
+  - `extraer_frames` — le permite al agente pedir frames adicionales de un clip puntual cuando su confianza es baja.
+  - `entregar_resultado` — la única forma en que el agente entrega su trabajo final (veredictos, estructura y `decisiones.md`); el loop del tool-runner termina cuando se llama.
+- El loop corre con `stream: true` y `max_iterations: 15`.
+
+### Presupuesto de frames bajo demanda
+
+El agente parte de un set inicial de frames (ver abajo) y puede pedir más vía `extraer_frames` cuando su confianza en un clip es menor a 0.6 y sospecha que le faltan datos (constantes en `src/lib/plan/agent.ts`):
+
+| Límite | Valor | Constante |
+|---|---|---|
+| Frames por llamada a `extraer_frames` | 12 | `MAX_FRAMES_PER_CALL` |
+| Llamadas a `extraer_frames` por corrida | 10 | `MAX_FRAMES_CALLS` |
+| Frames extra totales por corrida | 40 | `MAX_TOTAL_EXTRA_FRAMES` |
+| Imágenes en el primer turno (set inicial) | 80 | `MAX_INITIAL_IMAGES` |
+
+Cada llamada a la tool estima cuántos frames devolvería (`estimateFrameCount`) antes de ejecutar `ffmpeg`, para poder rechazarla sin gastar trabajo si excede el límite por llamada o el presupuesto total restante; en ese caso la tool responde con un mensaje de error de texto (no una excepción) para que el agente decida con lo que ya tiene. Cada llamada aceptada queda registrada en `framesCalls` de `audit.json`.
+
+El set inicial de frames (primer turno, antes de cualquier llamada a la tool) se arma con `pickInitialFrames`: clips narrados aportan 1 frame (el segundo de su lista si existe, si no el primero disponible); clips sin narración (B-roll) aportan hasta 4, hasta llegar al tope global de `MAX_INITIAL_IMAGES` (80) imágenes en el primer turno.
+
+### Prompt caching
+
+El primer user turn (`buildInitialUserContent`) concatena, en este orden: heurísticas del dominio (`config/domain-heuristics.md`), la transcripción completa (`transcripts/master.txt`), los frames iniciales de cada clip, y un último bloque de texto con instrucciones que cierra con `cache_control: { type: "ephemeral" }`. Ese breakpoint al final del bloque estable permite que el prompt cache de Anthropic cubra todo lo anterior (heurísticas + master.txt + frames iniciales) y se reutilice entre las iteraciones del loop del tool-runner a costo reducido en vez de re-enviar/re-cobrar ese contexto en cada turno. El `PLAN_AGENT_SYSTEM_PROMPT` (`src/lib/plan/prompt.ts`) es además completamente estable entre corridas (sin timestamps ni datos variables del job) para no invalidar el cache del `system`.
+
+El uso acumulado de tokens de todas las iteraciones (`input_tokens`, `output_tokens`, `cache_read_input_tokens`) se guarda en `usage` dentro de `audit.json`.
+
+### `config/domain-heuristics.md` — pistas editables sin tocar código
+
+El motor del agente es genérico: no conoce de antemano el dominio del curso. `config/domain-heuristics.md` es el único lugar donde vive el conocimiento específico del dominio actual (hoy, cursos de ganadería de AgroMax), y el agente las trata siempre como **pistas**, nunca como reglas absolutas que deban obedecerse contra la evidencia real del material (ver `PLAN_AGENT_SYSTEM_PROMPT`).
+
+El archivo es Markdown con secciones `## id-en-kebab-case`; cada ID es citable: cuando una pista de una sección influye en un veredicto, el agente cita ese ID exacto en el campo `heuristicas` de `verdicts.json` (y opcionalmente en `decisiones.md`), lo cual queda cruzado en `audit.json` para auditoría.
+
+**Para agregar una heurística nueva no se toca ningún archivo `.ts`**: basta con editar `config/domain-heuristics.md` y agregar una sección nueva con un ID estable, por ejemplo:
+
+```markdown
+## mi-nueva-heuristica
+
+- Descripción de la pista en español, tan específica como haga falta.
+```
+
+Si el archivo no existe al correr el agente, `readDomainHeuristics` no falla: registra una advertencia por consola y el agente corre solo con el motor genérico (sin heurísticas de dominio).
+
+### Re-correr sin re-transcribir
+
+Igual que las etapas 2/3.5, la etapa 4 se puede volver a correr sola sobre un job ya muestreado, sin repetir probe/transcripción/muestreo de frames:
+
+```bash
+curl -X POST http://localhost:3000/api/jobs/<jobId>/plan
+```
+
+`src/app/api/jobs/[jobId]/plan/route.ts` valida que el job exista (404 si no), que su `status` sea uno desde el que tiene sentido planear (`"sampled"`, `"planning"` o `"planned"`; 400 si todavía no fue muestreado) y que no haya ya un pipeline corriendo en memoria para ese job (409 si lo hay), y dispara `runPlanOnly` (`src/lib/pipeline.ts`) en background — nunca vuelve a llamar `runProbeStage`, `runTranscribeStage` ni `runFramesStage`. En la UI, el botón **"Generar estructura (agente)"** (job sin `plan/` aún) o **"Re-generar"** (job ya planeado) de `/jobs/[jobId]` llama a este mismo endpoint.
+
+### Filosofía: el humano audita, no aprueba en el camino
+
+No existe ningún paso de aprobación humana intermedia en la etapa 4: el agente recibe todo el contexto de una corrida (heurísticas, transcripción, frames), decide con su propio criterio (pidiendo más frames si lo necesita, dentro del presupuesto) y entrega un resultado final con `entregar_resultado` que se escribe directamente a disco. El rol del humano es **posterior**: revisar `plan/decisiones.md` y la vista de auditoría solo-lectura de `/jobs/[jobId]` (estructura, veredictos con confianza/razón/heurísticas citadas, frames usados, y los casos donde `pidioFramesExtra` cambió el veredicto), con los clips de baja confianza (`confianza < 0.6`) mostrados primero. Si el resultado no convence, la vía de corrección es editar `config/domain-heuristics.md` (o, en última instancia, volver a correr) — no hay un flujo de edición manual del plan en este repo.
+
 ## Setup del motor de transcripción
 
 La transcripción (etapa 3) nunca corre transcripción Whisper directamente en Node: cada motor es un **script Python independiente** que Node invoca vía `spawn` y que imprime a stdout un único JSON normalizado (`{ language, duration, segments }`, con `words` por segmento). Esto permite intercambiar el motor sin tocar el código Node que lo consume — ver `src/lib/transcribe/types.ts`, `engine.ts` y `python-engine.ts`.
@@ -268,11 +350,11 @@ GET /api/jobs/<jobId>/frames/<clip sin extensión>/frame_SSSS.jpg
 ## Estructura del código (`src/`)
 
 - `src/lib/types.ts` — tipos compartidos de todo el pipeline (`JobJson`, `JobStatus`, `MediaInfo`, `ProgressJson`, `FrameEntry`, `ManifestClip`, `FramesManifest`, etc.), usados por backend y UI.
-- `src/lib/jobs.ts` — persistencia en filesystem de todo el job: `job.json`, `probe/media.json`, `progress/progress.json`, `frames/manifest.json`, y las rutas de cada subdirectorio (`source/`, `probe/`, `transcripts/`, `progress/`, `frames/`). Documenta la invariante de `source/` inmutable.
+- `src/lib/jobs.ts` — persistencia en filesystem de todo el job: `job.json`, `probe/media.json`, `progress/progress.json`, `frames/manifest.json`, `plan/{verdicts,structure,audit}.json` y `plan/decisiones.md`, y las rutas de cada subdirectorio (`source/`, `probe/`, `transcripts/`, `progress/`, `frames/`, `plan/`). Documenta la invariante de `source/` inmutable.
 - `src/lib/zip.ts` — extracción del ZIP subido hacia `jobs/<id>/source/`.
 - `src/lib/probe.ts` — análisis inicial de cada video con `ffprobe` durante la ingesta (etapa 1: duración, audio, resolución, detección de problemas para `job.json`).
 - `src/lib/probe-stage.ts` — etapa 2: vuelve a correr `ffprobe` sobre `source/` para obtener metadata técnica completa y escribe `probe/media.json`, incluyendo el criterio `needsTranscode`.
-- `src/lib/pipeline.ts` — orquestador de las etapas 2, 3 y 3.5 (`runPipeline`), pensado para correr en background (fire-and-forget) tras la ingesta o al re-transcribir. Deduplica corridas concurrentes del mismo job en memoria (`isPipelineRunning`). También expone `runFramesOnly`, que corre únicamente la etapa 3.5 sobre un job ya transcrito (re-muestrear sin re-transcribir), validando que el `status` del job sea `"transcribed"`, `"sampling"` o `"sampled"`.
+- `src/lib/pipeline.ts` — orquestador de las etapas 2, 3, 3.5 y 4 (`runPipeline`), pensado para correr en background (fire-and-forget) tras la ingesta o al re-transcribir. Deduplica corridas concurrentes del mismo job en memoria (`isPipelineRunning`). También expone `runFramesOnly`, que corre únicamente la etapa 3.5 sobre un job ya transcrito (re-muestrear sin re-transcribir), validando que el `status` del job sea `"transcribed"`, `"sampling"` o `"sampled"`; y `runPlanOnly`, que corre únicamente la etapa 4 sobre un job ya muestreado (re-planear sin re-transcribir ni re-muestrear), validando que el `status` sea `"sampled"`, `"planning"` o `"planned"`.
 - `src/lib/transcribe/index.ts` — etapa 3: recorre los archivos en el orden de `probe/media.json`, transcribe cada uno con el motor configurado (con un mini-pool de concurrencia sin dependencias nuevas), detecta narración, escribe `transcripts/` y actualiza `progress/progress.json` por archivo.
 - `src/lib/transcribe/types.ts` — contrato TypeScript del motor de transcripción (`TranscribeEngine`, `TranscriptResult`, `TranscriptSegment`, `TranscriptWord`).
 - `src/lib/transcribe/engine.ts` — selector de motor según `TRANSCRIBE_ENGINE` (`mlx` o `faster`).
@@ -280,6 +362,11 @@ GET /api/jobs/<jobId>/frames/<clip sin extensión>/frame_SSSS.jpg
 - `src/lib/transcribe/narration.ts` — heurística de detección de narración anti-alucinación (medición de energía de audio + forma del transcript).
 - `src/lib/transcribe/writer.ts` — escritura de `<base>.json`/`.tsv`/`.txt` por archivo y de `master.txt` del job completo.
 - `src/lib/frames-stage.ts` — etapa 3.5: lee `probe/media.json` y `transcripts/summary.json`, calcula los timestamps a muestrear por clip (narrado vs. B-roll, con fallback de punto medio), extrae un JPG por timestamp con `ffmpeg-static` (mini-pool de concurrencia, mismo patrón que la etapa 3) y escribe `frames/manifest.json`. Borra y recrea `frames/` por completo en cada corrida para que re-muestrear sea idempotente; nunca toca `source/`.
+- `src/lib/plan-stage.ts` — etapa 4: valida que `ANTHROPIC_API_KEY` esté configurada (error explícito si no) y delega en `runPlanAgent`.
+- `src/lib/plan/agent.ts` — corre el agente autónomo de la etapa 4 con el SDK de Anthropic (`toolRunner` beta, modelo `claude-opus-4-8`, thinking adaptive, effort high): arma el primer turno (heurísticas + `master.txt` + frames iniciales, con breakpoint de prompt cache), expone las tools `extraer_frames` y `entregar_resultado`, gestiona el presupuesto de frames extra bajo demanda, y al recibir `entregar_resultado` escribe `plan/{verdicts,structure,audit}.json` y `plan/decisiones.md`.
+- `src/lib/plan/schemas.ts` — JSON Schemas en formato strict de Anthropic (`additionalProperties: false`, `required` completo) de las tools `extraer_frames` y `entregar_resultado` del agente de plan.
+- `src/lib/plan/prompt.ts` — system prompt (español, estable entre corridas) del agente autónomo de la etapa 4: motor genérico de dominio, trato de las heurísticas como pistas no reglas, regla de confianza/frames extra y contrato de `entregar_resultado`.
+- `config/domain-heuristics.md` — pistas específicas del dominio actual (cursos de AgroMax), editables sin tocar código; secciones `## id-kebab-case` citables por el agente en `verdicts.json`/`audit.json`.
 - `scripts/setup-python.sh` — crea `.venv-whisper/` e instala `mlx-whisper`.
 - `scripts/transcribe_mlx.py` — script del motor `mlx-whisper` (macOS/Apple Silicon).
 - `scripts/transcribe_faster.py` — script del motor `faster-whisper` (producción Windows/NVIDIA).
@@ -289,5 +376,6 @@ GET /api/jobs/<jobId>/frames/<clip sin extensión>/frame_SSSS.jpg
 - `src/app/api/jobs/[jobId]/route.ts` — expone `{ job, media, progress, summary }` de un job para que la UI pollee un único endpoint.
 - `src/app/api/jobs/[jobId]/transcribe/route.ts` — re-corre el pipeline completo (probe + transcripción + muestreo de frames) sobre un job existente, sin re-ingerir.
 - `src/app/api/jobs/[jobId]/frames/route.ts` — re-corre (o corre por primera vez) solo la etapa de muestreo de frames de un job ya transcrito, sin volver a probar ni re-transcribir.
+- `src/app/api/jobs/[jobId]/plan/route.ts` — re-corre (o corre por primera vez) solo la etapa de plan (agente autónomo) de un job ya muestreado, sin volver a probar, transcribir ni re-muestrear frames.
 - `src/app/api/jobs/[jobId]/frames/[...path]/route.ts` — sirve un JPG individual de `frames/<id>/` como `image/jpeg`, con protección anti path-traversal.
 - `src/app/api/jobs/[jobId]/master/route.ts` — sirve `transcripts/master.txt` como texto plano (404 si no existe todavía).
