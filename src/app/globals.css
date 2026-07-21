@@ -237,3 +237,92 @@ textarea:focus {
   color: var(--color-error-text);
   margin-bottom: 1rem;
 }
+
+/* Stepper de etapas del pipeline (jobs/[jobId]) */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  list-style: none;
+  padding: 0;
+  margin: 1.25rem 0;
+}
+
+.stepper-step {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.stepper-step--done {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.stepper-step--active {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+  background: rgba(61, 190, 75, 0.08);
+  font-weight: 600;
+}
+
+.stepper-step--error {
+  border-color: var(--color-error-border);
+  color: var(--color-error-text);
+}
+
+.stepper-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+}
+
+.stepper-actions {
+  margin: 0.75rem 0;
+}
+
+.stepper-error-msg {
+  color: var(--color-error-text);
+  font-size: 0.85rem;
+}
+
+/* Spinner CSS simple para la etapa activa y filas en transcripción */
+.spinner {
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: agromax-spin 0.7s linear infinite;
+}
+
+.spinner-inline {
+  margin-right: 0.3rem;
+  vertical-align: middle;
+}
+
+@keyframes agromax-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Bloque de master.txt en la sección colapsable */
+.master-pre {
+  max-height: 420px;
+  overflow: auto;
+  padding: 1rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+}
