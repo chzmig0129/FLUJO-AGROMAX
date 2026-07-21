@@ -315,6 +315,35 @@ textarea:focus {
   }
 }
 
+/* Barra de progreso de subida del ZIP (page.tsx) */
+.upload-progress {
+  margin-bottom: 1rem;
+}
+
+.upload-progress-bar-track {
+  width: 100%;
+  height: 0.6rem;
+  border-radius: 999px;
+  background: var(--color-border);
+  overflow: hidden;
+}
+
+.upload-progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    var(--color-green-light),
+    var(--color-green-dark)
+  );
+  transition: width 0.15s ease;
+}
+
+.upload-progress-label {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+  color: var(--color-muted);
+}
+
 /* Bloque de master.txt en la sección colapsable */
 .master-pre {
   max-height: 420px;
