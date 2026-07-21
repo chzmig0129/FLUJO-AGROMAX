@@ -8,8 +8,15 @@
  * muestreado simplemente vuelve a correr probe, transcribe y frames,
  * sobreescribiendo probe/media.json, transcripts/ y frames/.
  */
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { runFramesStage } from "./frames-stage";
-import { readJobJson, updateJobStatus } from "./jobs";
+import {
+  readFramesManifest,
+  readJobJson,
+  transcriptsDir,
+  updateJobStatus,
+} from "./jobs";
 import { runPlanStage } from "./plan-stage";
 import { runProbeStage } from "./probe-stage";
 import { runTranscribeStage } from "./transcribe/index";
@@ -160,11 +167,40 @@ async function executeFramesOnly(jobId: string): Promise<void> {
 const PLAN_READY_STATUSES: JobStatus[] = ["sampled", "planning", "planned"];
 
 /**
+ * Verifica (de forma tolerante, sin lanzar) si un job tiene los prerequisitos
+ * reales de la etapa de plan ya generados en disco: transcripts/summary.json
+ * (etapa de transcripción) y frames/manifest.json (etapa de muestreo). Se usa
+ * para decidir si un job en status 'error' puede reintentar solo el plan sin
+ * re-transcribir, distinguiendo un fallo "antes del plan" (faltan
+ * prerequisitos) de un fallo "durante el plan" (ej. API key ausente, con
+ * prerequisitos ya presentes).
+ */
+export async function hasPlanPrerequisites(jobId: string): Promise<boolean> {
+  const manifest = await readFramesManifest(jobId);
+  if (!manifest) {
+    return false;
+  }
+  try {
+    await fs.access(path.join(transcriptsDir(jobId), "summary.json"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Corre solo la etapa de plan (filtro editorial y estructura autónoma) para
  * un job ya muestreado (permite re-planear sin volver a correr probe/
  * transcribe/frames). Reutiliza el mismo registro `running` que runPipeline
  * para evitar corridas concurrentes del mismo job, sea cual sea la etapa que
  * las disparó.
+ *
+ * También acepta jobs en status 'error' siempre que ya tengan los
+ * prerequisitos reales del plan (transcripts/summary.json y
+ * frames/manifest.json), lo cual permite reintentar solo el plan (por
+ * ejemplo tras configurar ANTHROPIC_API_KEY) sin re-transcribir todo el
+ * material. Si el job está en 'error' pero le faltan esos prerequisitos, la
+ * falla ocurrió antes del plan y hace falta reintentar el pipeline completo.
  */
 export function runPlanOnly(jobId: string): Promise<void> {
   const existing = running.get(jobId);
@@ -184,12 +220,24 @@ export function runPlanOnly(jobId: string): Promise<void> {
 async function executePlanOnly(jobId: string): Promise<void> {
   try {
     const current = await readJobJson(jobId);
-    if (!PLAN_READY_STATUSES.includes(current.status)) {
+    const readyByStatus = PLAN_READY_STATUSES.includes(current.status);
+    const readyByErrorWithPrereqs =
+      current.status === "error" && (await hasPlanPrerequisites(jobId));
+
+    if (!readyByStatus && !readyByErrorWithPrereqs) {
+      if (current.status === "error") {
+        throw new Error(
+          `No se puede reintentar solo el plan: el job "${jobId}" falló antes de completar el muestreo de frames (faltan transcripts/summary.json o frames/manifest.json). Reintenta el pipeline completo.`
+        );
+      }
       throw new Error(
         `No se puede planear: el job "${jobId}" debe estar muestreado primero (status actual: "${current.status}")`
       );
     }
 
+    // Si veníamos de un 'error' anterior (ej. API key faltante) con
+    // prerequisitos válidos, updateJobStatus limpia errorMessage
+    // automáticamente porque el nuevo status ('planning') no es 'error'.
     await updateJobStatus(jobId, "planning", {
       stages: { plan: { startedAt: new Date().toISOString() } },
     });

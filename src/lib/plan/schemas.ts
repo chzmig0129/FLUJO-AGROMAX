@@ -81,6 +81,23 @@ const verdictSchema = {
       description:
         "IDs (kebab-case) de las secciones de config/domain-heuristics.md que se usaron como pista, si alguna.",
     },
+    verdictAntes: {
+      type: "string",
+      enum: ["leccion", "broll", "descartar", "otro_curso"],
+      description:
+        "Opcional. Solo si pediste frames extra (extraer_frames) para este clip y eso cambió (o confirmó tras duda) tu decisión: el veredicto que tenías ANTES de ver los frames extra.",
+    },
+    verdictDespues: {
+      type: "string",
+      enum: ["leccion", "broll", "descartar", "otro_curso"],
+      description:
+        "Opcional. Junto con verdictAntes: el veredicto final DESPUÉS de ver los frames extra (debe coincidir con 'verdict').",
+    },
+    queCambio: {
+      type: "string",
+      description:
+        "Opcional. Junto con verdictAntes/verdictDespues: explicación breve en español de qué mostraron los frames extra que cambió (o confirmó) el veredicto.",
+    },
   },
   required: ["clip", "verdict", "curso", "razon", "confianza", "heuristicas"],
   additionalProperties: false,

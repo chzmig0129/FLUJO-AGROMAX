@@ -57,10 +57,23 @@ const MAX_TOTAL_EXTRA_FRAMES = 40;
 /** Cap global de imágenes en el primer turno (para no reventar el contexto). */
 const MAX_INITIAL_IMAGES = 80;
 
+/**
+ * Veredicto tal como lo entrega el agente en el payload de `entregar_resultado`:
+ * el shape persistido de Verdict más los campos opcionales de auditoría
+ * (verdictAntes/verdictDespues/queCambio) que el agente llena cuando pedir
+ * frames extra cambió (o confirmó) su decisión sobre un clip. Estos campos
+ * extra no se persisten en verdicts.json (solo en audit.json.clips).
+ */
+type PayloadVerdict = Verdict & {
+  verdictAntes?: Verdict["verdict"];
+  verdictDespues?: Verdict["verdict"];
+  queCambio?: string;
+};
+
 /** Payload que entrega el agente vía la tool `entregar_resultado`. */
 interface EntregarResultadoPayload {
   courseTitle: string;
-  verdicts: Verdict[];
+  verdicts: PayloadVerdict[];
   modules: StructureJson["modules"];
   decisionesMd: string;
 }
@@ -335,7 +348,7 @@ export async function runPlanAgent(jobId: string): Promise<void> {
     );
   }
 
-  const verdicts: Verdict[] = payload.verdicts;
+  const verdicts: PayloadVerdict[] = payload.verdicts;
 
   const structure: StructureJson = {
     courseTitle: payload.courseTitle,
@@ -361,6 +374,9 @@ export async function runPlanAgent(jobId: string): Promise<void> {
       lowConfidence: v.confianza < 0.6,
       heuristicas: v.heuristicas,
       pidioFramesExtra: clipsCalledForFrames.has(v.clip),
+      verdictAntes: v.verdictAntes,
+      verdictDespues: v.verdictDespues,
+      queCambio: v.queCambio,
     })),
   };
 

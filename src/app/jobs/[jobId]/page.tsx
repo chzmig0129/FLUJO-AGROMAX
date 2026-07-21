@@ -22,6 +22,12 @@
  * del agente y sus frames, apartados (descartes / otro curso) y
  * decisiones.md. No hay controles de aprobar/bloquear: la etapa corre sin
  * humano en el loop, esto es solo para auditar después.
+ *
+ * Si el job cae en 'error' pero ya tiene frames/manifest.json (los
+ * prerequisitos reales del plan), se ofrece además "Reintentar plan (sin
+ * re-transcribir)" — útil cuando la falla fue solo de la etapa de plan (ej.
+ * ANTHROPIC_API_KEY ausente). El botón "Reintentar pipeline completo" sigue
+ * disponible para fallas anteriores (probe/transcribe/frames).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
@@ -405,6 +411,12 @@ export default function JobPage() {
   const { job, media, progress, summary, manifest, structure, audit, decisiones } =
     data;
   const isError = job.status === "error";
+  // El job puede reintentar solo el plan (sin re-transcribir) si falló
+  // estando en 'error' pero ya tiene los prerequisitos del plan generados
+  // en disco: frames/manifest.json (proxy de que probe/transcribe/frames ya
+  // corrieron con éxito). Debe coincidir con el criterio tolerante de
+  // hasPlanPrerequisites en src/lib/pipeline.ts.
+  const canRetryPlanOnly = isError && manifest !== null;
   // El resumen final se muestra en 'transcribed' (jobs viejos o mientras
   // arranca el muestreo), 'sampled' (frames ya generados), y también
   // 'planning'/'planned' (la etapa de plan corre después del muestreo, así
@@ -444,14 +456,31 @@ export default function JobPage() {
         <div className="error-banner">
           <strong>Ocurrió un error en el pipeline.</strong>
           <p>{job.errorMessage ?? "Error desconocido."}</p>
-          <button
-            className="btn"
-            type="button"
-            onClick={handleRetranscribe}
-            disabled={retranscribing}
-          >
-            {retranscribing ? "Reintentando…" : "Reintentar"}
-          </button>
+          <div className="stepper-actions">
+            {canRetryPlanOnly && (
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={handlePlan}
+                disabled={planning}
+              >
+                {planning
+                  ? "Reintentando plan…"
+                  : "Reintentar plan (sin re-transcribir)"}
+              </button>
+            )}
+            <button
+              className="btn"
+              type="button"
+              onClick={handleRetranscribe}
+              disabled={retranscribing}
+            >
+              {retranscribing
+                ? "Reintentando…"
+                : "Reintentar pipeline completo"}
+            </button>
+          </div>
+          {planError && <p className="stepper-error-msg">{planError}</p>}
           {retranscribeError && (
             <p className="stepper-error-msg">{retranscribeError}</p>
           )}
