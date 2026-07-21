@@ -37,6 +37,10 @@ export interface VideoFileMeta {
  * - 'sampled': frames/ y frames/manifest.json fueron generados con éxito.
  * - 'planning': corriendo el agente autónomo de filtro editorial y estructura (etapa 4).
  * - 'planned': plan/ fue generado con éxito (verdicts.json, structure.json, audit.json, decisiones.md).
+ * - 'preparing': corriendo las etapas deterministas de preparación (5A/5B/5C:
+ *   silencio, proxies y cortes) sobre los clips 'leccion' de la estructura.
+ * - 'prepared': probe/silence.json, assets/proxies/ y plan/cuts/ fueron
+ *   generados con éxito.
  * - 'error': ocurrió un error irrecuperable en cualquier etapa del pipeline.
  */
 export type JobStatus =
@@ -49,6 +53,8 @@ export type JobStatus =
   | "sampled"
   | "planning"
   | "planned"
+  | "preparing"
+  | "prepared"
   | "error";
 
 /**
@@ -80,6 +86,9 @@ export interface JobJson {
     transcribe?: StageTiming;
     frames?: StageTiming;
     plan?: StageTiming;
+    silence?: StageTiming;
+    proxies?: StageTiming;
+    cuts?: StageTiming;
   };
   errorMessage?: string;
 }
@@ -189,6 +198,15 @@ export interface StructureJson {
       id: string;
       title: string;
       order: number;
+      /**
+       * Tipo de lección: 'demo' es una clase donde el instructor trabaja con
+       * las manos (laparoscopía, inseminación, descolado, inyecciones, etc.)
+       * y por lo tanto NO se le recorta el silencio interno (el silencio ES
+       * parte del contenido, no aire muerto). 'normal' es el resto. El
+       * agente lo emite en la etapa 4; si falta (structure.json viejo), se
+       * asume 'normal' como fallback.
+       */
+      kind?: "demo" | "normal";
       segments: Array<{
         clip: string;
         startSeconds: number;
@@ -235,4 +253,104 @@ export interface AuditJson {
     verdictDespues?: Verdict["verdict"];
     queCambio?: string;
   }>;
+}
+
+/**
+ * Un intervalo de silencio detectado por ffmpeg silencedetect dentro de un
+ * clip, en probe/silence.json (etapa 5A).
+ */
+export interface SilenceInterval {
+  start: number;
+  end: number;
+  duration: number;
+}
+
+/**
+ * Resultado de silencedetect sobre un clip individual, en probe/silence.json.
+ * `skipped` es true para clips de una lección 'demo': se miden los silencios
+ * igual (informativo, para inspección) pero no se usan para proyectar
+ * duración porque el silencio ES el contenido de la demo, no aire muerto.
+ */
+export interface SilenceClip {
+  filename: string;
+  kind: "demo" | "normal";
+  skipped: boolean;
+  silences: SilenceInterval[];
+  count: number;
+  /** Segundos totales de silencio medidos (informativo en demos). */
+  totalSilentSeconds: number;
+  /** Duración original del clip, en segundos. */
+  rawSeconds: number;
+  /**
+   * Duración proyectada tras recortar el silencio recortable. En demos,
+   * projectedSeconds === rawSeconds (no se recorta nada).
+   */
+  projectedSeconds: number;
+  /** projectedSeconds / rawSeconds. En demos siempre 1 (sin recorte). */
+  shrinkRatio: number;
+}
+
+/** Representación persistida de jobs/<id>/probe/silence.json (etapa 5A). */
+export interface SilenceJson {
+  generatedAt: string;
+  clips: SilenceClip[];
+}
+
+/**
+ * Un rango de frames a recortar dentro de un CutsClip (etapa 5C), derivado
+ * de un hueco de silencio entre segmentos de la transcripción de Whisper.
+ * `confirmedBySilence` indica si el corte se solapa con algún intervalo de
+ * probe/silence.json de ese clip (doble validación: hueco de Whisper +
+ * silencio medido por ffmpeg).
+ */
+export interface CutRange {
+  startFrame: number;
+  endFrame: number;
+  startSeconds: number;
+  endSeconds: number;
+  gapSeconds: number;
+  confirmedBySilence: boolean;
+}
+
+/** Un rango de frames a conservar (complemento de los CutRange) en un CutsClip. */
+export interface FrameRange {
+  startFrame: number;
+  endFrame: number;
+}
+
+/**
+ * Los cortes propuestos para un segmento de clip dentro de una lección, en
+ * plan/cuts/<lessonId>.json (etapa 5C). En lecciones 'demo', `cuts` siempre
+ * queda vacío y `keep` es el segmento completo (sin recorte de silencio
+ * interno).
+ */
+export interface CutsClip {
+  clip: string;
+  kind: "demo" | "normal";
+  segment: {
+    startSeconds: number;
+    endSeconds: number;
+    startFrame: number;
+    endFrame: number;
+  };
+  cuts: CutRange[];
+  keep: FrameRange[];
+  stats: {
+    cutFrames: number;
+    keepFrames: number;
+    rawSeconds: number;
+    projectedSeconds: number;
+  };
+}
+
+/**
+ * Representación persistida de jobs/<id>/plan/cuts/<lessonId>.json (etapa
+ * 5C): los cortes deterministas de todos los segmentos/clips de una lección.
+ */
+export interface CutsFile {
+  lessonId: string;
+  lessonTitle: string;
+  fps: number;
+  generatedAt: string;
+  clips: CutsClip[];
 }

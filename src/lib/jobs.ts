@@ -16,11 +16,13 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type {
   AuditJson,
+  CutsFile,
   FramesManifest,
   JobJson,
   JobStatus,
   MediaInfo,
   ProgressJson,
+  SilenceJson,
   StageTiming,
   StructureJson,
   Verdict,
@@ -102,6 +104,36 @@ function progressDir(id: string): string {
 /** Ruta absoluta a progress/progress.json de un job. */
 export function progressJsonPath(id: string): string {
   return path.join(progressDir(id), "progress.json");
+}
+
+/** Ruta absoluta al subdirectorio de assets generados (proxies, etc.) de un job. */
+export function assetsDir(id: string): string {
+  return path.join(jobPath(id), "assets");
+}
+
+/** Ruta absoluta al subdirectorio de proxies de edición de un job (etapa 5B). */
+export function proxiesDir(id: string): string {
+  return path.join(assetsDir(id), "proxies");
+}
+
+/** Ruta absoluta a probe/silence.json de un job (etapa 5A). */
+export function silenceJsonPath(id: string): string {
+  return path.join(probeDir(id), "silence.json");
+}
+
+/** Ruta absoluta al subdirectorio de cortes deterministas por lección de un job (etapa 5C). */
+export function cutsDir(id: string): string {
+  return path.join(planDir(id), "cuts");
+}
+
+/** Ruta absoluta a plan/cuts/<lessonId>.json de un job. */
+function cutsFilePath(id: string, lessonId: string): string {
+  return path.join(cutsDir(id), `${lessonId}.json`);
+}
+
+/** Ruta absoluta a progress/prep-progress.json de un job (etapas 5A/5B/5C). */
+export function prepProgressJsonPath(id: string): string {
+  return path.join(progressDir(id), "prep-progress.json");
 }
 
 /**
@@ -349,6 +381,116 @@ export async function readDecisionesMd(id: string): Promise<string | null> {
 }
 
 /**
+ * Escribe (o sobrescribe) probe/silence.json de un job (etapa 5A). Crea
+ * probe/ de forma recursiva si todavía no existe.
+ */
+export async function writeSilenceJson(
+  id: string,
+  silence: SilenceJson
+): Promise<void> {
+  await fs.mkdir(probeDir(id), { recursive: true });
+  await fs.writeFile(
+    silenceJsonPath(id),
+    JSON.stringify(silence, null, 2),
+    "utf-8"
+  );
+}
+
+/**
+ * Lee probe/silence.json de un job. Devuelve null si todavía no existe (job
+ * que aún no llegó a la etapa de silencio) en vez de lanzar un error.
+ */
+export async function readSilenceJson(
+  id: string
+): Promise<SilenceJson | null> {
+  try {
+    const raw = await fs.readFile(silenceJsonPath(id), "utf-8");
+    return JSON.parse(raw) as SilenceJson;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Escribe (o sobrescribe) plan/cuts/<lessonId>.json de un job (etapa 5C).
+ * Crea plan/cuts/ de forma recursiva si todavía no existe. Idempotente:
+ * sobrescribe por completo el archivo de esa lección.
+ */
+export async function writeCutsFile(
+  id: string,
+  lessonId: string,
+  data: CutsFile
+): Promise<void> {
+  await fs.mkdir(cutsDir(id), { recursive: true });
+  await fs.writeFile(
+    cutsFilePath(id, lessonId),
+    JSON.stringify(data, null, 2),
+    "utf-8"
+  );
+}
+
+/**
+ * Lee todos los archivos de plan/cuts/ de un job. Devuelve un array vacío si
+ * el directorio todavía no existe (job que aún no llegó a la etapa de
+ * cortes) en vez de lanzar un error. Tolerante a archivos individuales
+ * corruptos o no-JSON dentro de plan/cuts/: los ignora en vez de abortar la
+ * lectura completa (por ejemplo si un worker quedó a medio escribir).
+ */
+export async function readCutsFiles(id: string): Promise<CutsFile[]> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(cutsDir(id));
+  } catch {
+    return [];
+  }
+
+  const results: CutsFile[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    try {
+      const raw = await fs.readFile(path.join(cutsDir(id), entry), "utf-8");
+      results.push(JSON.parse(raw) as CutsFile);
+    } catch {
+      // Archivo corrupto o a medio escribir: se ignora en vez de abortar
+      // la lectura de los demás archivos de cuts/.
+      continue;
+    }
+  }
+  return results;
+}
+
+/**
+ * Escribe (o sobrescribe) progress/prep-progress.json de un job (etapas
+ * 5A/5B/5C). Crea progress/ de forma recursiva si todavía no existe.
+ */
+export async function writePrepProgressJson(
+  id: string,
+  progress: ProgressJson
+): Promise<void> {
+  await fs.mkdir(progressDir(id), { recursive: true });
+  await fs.writeFile(
+    prepProgressJsonPath(id),
+    JSON.stringify(progress, null, 2),
+    "utf-8"
+  );
+}
+
+/**
+ * Lee progress/prep-progress.json de un job. Devuelve null si todavía no
+ * existe en vez de lanzar un error.
+ */
+export async function readPrepProgressJson(
+  id: string
+): Promise<ProgressJson | null> {
+  try {
+    const raw = await fs.readFile(prepProgressJsonPath(id), "utf-8");
+    return JSON.parse(raw) as ProgressJson;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Mergea el timing existente de una etapa con un patch parcial (por ejemplo
  * solo finishedAt), sin perder el startedAt ya guardado. Si no hay timing
  * previo ni el patch trae startedAt, no hay nada consistente que guardar.
@@ -387,6 +529,9 @@ export async function updateJobStatus(
       transcribe?: { startedAt?: string; finishedAt?: string };
       frames?: { startedAt?: string; finishedAt?: string };
       plan?: { startedAt?: string; finishedAt?: string };
+      silence?: { startedAt?: string; finishedAt?: string };
+      proxies?: { startedAt?: string; finishedAt?: string };
+      cuts?: { startedAt?: string; finishedAt?: string };
     };
     errorMessage?: string;
   }
@@ -405,6 +550,15 @@ export async function updateJobStatus(
           extra.stages.frames
         ),
         plan: mergeStageTiming(current.stages?.plan, extra.stages.plan),
+        silence: mergeStageTiming(
+          current.stages?.silence,
+          extra.stages.silence
+        ),
+        proxies: mergeStageTiming(
+          current.stages?.proxies,
+          extra.stages.proxies
+        ),
+        cuts: mergeStageTiming(current.stages?.cuts, extra.stages.cuts),
       }
     : current.stages;
 

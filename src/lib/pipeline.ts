@@ -10,15 +10,19 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { runCutsStage } from "./cuts-stage";
 import { runFramesStage } from "./frames-stage";
 import {
   readFramesManifest,
   readJobJson,
+  structureJsonPath,
   transcriptsDir,
   updateJobStatus,
 } from "./jobs";
 import { runPlanStage } from "./plan-stage";
 import { runProbeStage } from "./probe-stage";
+import { runProxyStage } from "./proxy-stage";
+import { runSilenceStage } from "./silence-stage";
 import { runTranscribeStage } from "./transcribe/index";
 import type { JobStatus } from "./types";
 
@@ -95,11 +99,47 @@ async function executePipeline(jobId: string): Promise<void> {
     await updateJobStatus(jobId, "planned", {
       stages: { plan: { finishedAt: new Date().toISOString() } },
     });
+
+    // Etapas 5A/5B/5C: preparación determinista (silencio, proxies, cortes).
+    await runPrepStages(jobId);
   } catch (err) {
     const errorMessage =
       err instanceof Error ? err.message : "Error desconocido en el pipeline";
     await updateJobStatus(jobId, "error", { errorMessage });
   }
+}
+
+/**
+ * Corre en secuencia las tres etapas deterministas de preparación (5A
+ * silencio, 5B proxies, 5C cortes) sobre los clips 'leccion' de la
+ * estructura del job, encadenando 'preparing' → 'prepared'. No captura
+ * errores: el llamador (runPipeline o runPrepOnly) es responsable de
+ * marcar el job como 'error' si algo falla acá.
+ */
+async function runPrepStages(jobId: string): Promise<void> {
+  await updateJobStatus(jobId, "preparing", {
+    stages: { silence: { startedAt: new Date().toISOString() } },
+  });
+  await runSilenceStage(jobId);
+  await updateJobStatus(jobId, "preparing", {
+    stages: { silence: { finishedAt: new Date().toISOString() } },
+  });
+
+  await updateJobStatus(jobId, "preparing", {
+    stages: { proxies: { startedAt: new Date().toISOString() } },
+  });
+  await runProxyStage(jobId);
+  await updateJobStatus(jobId, "preparing", {
+    stages: { proxies: { finishedAt: new Date().toISOString() } },
+  });
+
+  await updateJobStatus(jobId, "preparing", {
+    stages: { cuts: { startedAt: new Date().toISOString() } },
+  });
+  await runCutsStage(jobId);
+  await updateJobStatus(jobId, "prepared", {
+    stages: { cuts: { finishedAt: new Date().toISOString() } },
+  });
 }
 
 /**
@@ -250,6 +290,89 @@ async function executePlanOnly(jobId: string): Promise<void> {
       err instanceof Error
         ? err.message
         : "Error desconocido en la etapa de plan";
+    await updateJobStatus(jobId, "error", { errorMessage });
+  }
+}
+
+/**
+ * Estados a partir de los cuales tiene sentido (re)correr solo las etapas de
+ * preparación (5A/5B/5C): el job ya tiene plan/structure.json generado (o
+ * incluso ya pasó por preparación antes, lo cual es válido para
+ * re-prepararlo, por ejemplo tras corregir un `kind` mal marcado).
+ */
+const PREP_READY_STATUSES: JobStatus[] = ["planned", "preparing", "prepared"];
+
+/**
+ * Verifica (de forma tolerante, sin lanzar) si un job tiene el prerequisito
+ * real de las etapas de preparación ya generado en disco: plan/structure.json
+ * (etapa 4). Se usa para decidir si un job en status 'error' puede
+ * reintentar solo la preparación sin re-planear.
+ */
+async function hasPrepPrerequisites(jobId: string): Promise<boolean> {
+  try {
+    await fs.access(structureJsonPath(jobId));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Corre solo las etapas de preparación (5A silencio, 5B proxies, 5C cortes)
+ * para un job ya planeado (permite re-preparar sin volver a correr
+ * probe/transcribe/frames/plan). Reutiliza el mismo registro `running` que
+ * runPipeline para evitar corridas concurrentes del mismo job, sea cual sea
+ * la etapa que las disparó.
+ *
+ * También acepta jobs en status 'error' siempre que ya tengan el
+ * prerequisito real (plan/structure.json), lo cual permite reintentar solo
+ * la preparación (por ejemplo tras un fallo puntual de ffmpeg) sin
+ * re-planear todo el curso. Si el job está en 'error' pero le falta ese
+ * prerequisito, la falla ocurrió antes de la preparación y hace falta
+ * reintentar el pipeline completo (o al menos el plan).
+ */
+export function runPrepOnly(jobId: string): Promise<void> {
+  const existing = running.get(jobId);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = executePrepOnly(jobId).finally(() => {
+    running.delete(jobId);
+  });
+
+  running.set(jobId, promise);
+  return promise;
+}
+
+/** Ejecuta únicamente las etapas de preparación, validando el status previo del job. */
+async function executePrepOnly(jobId: string): Promise<void> {
+  try {
+    const current = await readJobJson(jobId);
+    const readyByStatus = PREP_READY_STATUSES.includes(current.status);
+    const readyByErrorWithPrereqs =
+      current.status === "error" && (await hasPrepPrerequisites(jobId));
+
+    if (!readyByStatus && !readyByErrorWithPrereqs) {
+      if (current.status === "error") {
+        throw new Error(
+          `No se puede reintentar solo la preparación: el job "${jobId}" falló antes de completar el plan (falta plan/structure.json). Reintenta el pipeline completo.`
+        );
+      }
+      throw new Error(
+        `No se puede preparar: el job "${jobId}" debe estar planeado primero (status actual: "${current.status}")`
+      );
+    }
+
+    // Si veníamos de un 'error' anterior con prerequisitos válidos,
+    // updateJobStatus limpia errorMessage automáticamente porque el nuevo
+    // status ('preparing') no es 'error'.
+    await runPrepStages(jobId);
+  } catch (err) {
+    const errorMessage =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido en la preparación";
     await updateJobStatus(jobId, "error", { errorMessage });
   }
 }
