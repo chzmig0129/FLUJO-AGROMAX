@@ -405,3 +405,227 @@ textarea:focus {
   font-size: 0.72rem;
   color: var(--color-muted);
 }
+
+/* Sección de auditoría de la etapa de plan (agente autónomo, jobs/[jobId]) */
+.audit-section {
+  margin-top: 1.5rem;
+}
+
+.audit-hint {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+}
+
+.structure-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  margin: 0.75rem 0 1.25rem;
+}
+
+.structure-module {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.structure-module h4 {
+  margin: 0 0 0.25rem;
+}
+
+.structure-module-topics {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}
+
+.structure-lesson-list,
+.structure-segment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.structure-lesson {
+  margin-top: 0.5rem;
+}
+
+.structure-lesson-title {
+  font-weight: 600;
+}
+
+.structure-segment-list {
+  margin-top: 0.3rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--color-border);
+}
+
+.structure-segment {
+  padding: 0.2rem 0;
+  font-size: 0.85rem;
+}
+
+.structure-segment-range {
+  color: var(--color-muted);
+}
+
+.structure-segment-topic {
+  color: var(--color-text);
+}
+
+/* Tarjetas de veredicto por clip */
+.clip-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0.75rem 0 1.25rem;
+}
+
+.clip-card {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-accent);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.clip-card--low-confidence {
+  border-color: #e2a336;
+  border-left-color: #e2a336;
+  background: #fff9ef;
+}
+
+.clip-card-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.clip-card-filename {
+  font-weight: 600;
+}
+
+/* Badges de veredicto por color, según el tipo */
+.verdict-badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.verdict-badge--leccion {
+  background: rgba(14, 138, 78, 0.12);
+  color: var(--color-green-dark);
+  border: 1px solid rgba(14, 138, 78, 0.35);
+}
+
+.verdict-badge--broll {
+  background: rgba(43, 108, 176, 0.12);
+  color: #2b6cb0;
+  border: 1px solid rgba(43, 108, 176, 0.35);
+}
+
+.verdict-badge--descartar {
+  background: var(--color-error-bg);
+  color: var(--color-error-text);
+  border: 1px solid var(--color-error-border);
+}
+
+.verdict-badge--otro-curso {
+  background: rgba(226, 163, 54, 0.15);
+  color: #a06a12;
+  border: 1px solid rgba(226, 163, 54, 0.4);
+}
+
+.badge-warning {
+  background: rgba(226, 163, 54, 0.15);
+  color: #a06a12;
+  border: 1px solid rgba(226, 163, 54, 0.4);
+}
+
+/* Barra de confianza del veredicto */
+.confidence-bar {
+  width: 100%;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--color-border);
+  overflow: hidden;
+  margin-top: 0.25rem;
+}
+
+.confidence-bar-fill {
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    var(--color-green-light),
+    var(--color-green-dark)
+  );
+}
+
+.confidence-label {
+  margin: 0.25rem 0 0.4rem;
+  font-size: 0.78rem;
+  color: var(--color-muted);
+}
+
+.heuristic-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.4rem 0;
+}
+
+.heuristic-chip {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
+}
+
+.frames-extra-marker {
+  font-size: 0.8rem;
+  color: var(--color-text);
+  margin: 0.4rem 0;
+}
+
+.frames-extra-detail {
+  color: var(--color-muted);
+}
+
+.frames-grid--mini {
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+}
+
+/* Sección de apartados (descartes / otro curso) */
+.apartados-section {
+  margin-top: 1.25rem;
+}
+
+.apartado-row {
+  align-items: flex-start;
+}
+
+.apartado-razon {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  text-align: right;
+}
+
+/* decisiones.md */
+.decisiones-details {
+  margin-top: 1.25rem;
+}
+
+.usage-line {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}
