@@ -37,14 +37,20 @@ const execFileAsync = promisify(execFile);
 /**
  * Descubre los clips 'leccion' únicos a partir de plan/structure.json: son
  * los que aparecen en algún segments[] de alguna lección de algún módulo.
- * Devuelve, por clip, el `kind` de la lección que lo referencia (fallback
- * 'normal' si la lección no trae kind, por ejemplo structure.json viejo).
+ * Devuelve, por clip, el `kind` resuelto (fallback 'normal' si la lección no
+ * trae kind, por ejemplo structure.json viejo).
  *
- * Si un mismo clip apareciera en más de una lección con kind distinto (caso
- * borde no esperado en la práctica, ya que un clip suele pertenecer a una
- * sola lección), se conserva el kind de la PRIMERA lección en la que aparece
- * — no hay forma correcta de "promediar" kind, así que hay que decidir algo
- * determinista.
+ * Si un mismo clip aparece en más de una lección con kind distinto (caso
+ * borde real: rumen-final.mp4 en el job de prueba está en una lección
+ * 'normal' Y en una lección 'demo'), se resuelve como 'demo' apenas
+ * CUALQUIER lección lo use como demostración — sin importar el orden en que
+ * aparezcan las lecciones. Criterio conservador y no arbitrario (a
+ * diferencia de "gana la primera lección"): si a ese clip se le recorta
+ * silencio pensando que es contenido normal, se rompería la lección demo que
+ * lo usa (ahí el silencio ES el contenido). cuts-stage.ts sí decide el kind
+ * correctamente por SEGMENTO (cada lección obtiene su propio CutsClip con su
+ * kind real); esto solo afecta el resumen agregado por clip de
+ * probe/silence.json que se muestra en la UI (🖐 badge / tabla de shrink).
  */
 function collectLessonClips(structure: StructureJson): Map<string, "demo" | "normal"> {
   const clips = new Map<string, "demo" | "normal">();
@@ -52,7 +58,10 @@ function collectLessonClips(structure: StructureJson): Map<string, "demo" | "nor
     for (const lesson of mod.lessons) {
       const kind = lesson.kind ?? "normal";
       for (const segment of lesson.segments) {
-        if (!clips.has(segment.clip)) {
+        const existing = clips.get(segment.clip);
+        // 'demo' es "pegajoso": una vez que alguna lección lo marca como
+        // demo, ninguna lección 'normal' posterior lo puede degradar.
+        if (existing !== "demo") {
           clips.set(segment.clip, kind);
         }
       }

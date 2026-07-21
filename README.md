@@ -307,10 +307,10 @@ Por cada clip `leccion` que no tenga ya un proxy actualizado, corre:
 ```bash
 ffmpeg -y -i <src> -vf scale=1920:1080 -r 30 \
   -c:v libx264 -crf 18 -preset medium \
-  -c:a aac -b:a 192k <out>.tmp.mp4
+  -c:a aac -b:a 192k <clip>.mp4.tmp
 ```
 
-(`PROXY_WIDTH = 1920`, `PROXY_HEIGHT = 1080`, `PROXY_FPS = 30`) y solo al terminar con éxito renombra `<out>.tmp.mp4` → `<out>.mp4` — así un proceso interrumpido a mitad de camino nunca deja un proxy a medio escribir que se confunda con uno completo. Clips sin pista de audio (por ejemplo `video_sin_audio.MOV` del job de prueba) no rompen el comando: con `-c:a aac` pero sin stream de audio de entrada, `ffmpeg` simplemente no produce audio de salida, sin fallar.
+(`PROXY_WIDTH = 1920`, `PROXY_HEIGHT = 1080`, `PROXY_FPS = 30`) y solo al terminar con éxito renombra `<clip>.mp4.tmp` → `<clip>.mp4` — así un proceso interrumpido a mitad de camino nunca deja un proxy a medio escribir que se confunda con uno completo. Clips sin pista de audio (por ejemplo `video_sin_audio.MOV` del job de prueba) no rompen el comando: con `-c:a aac` pero sin stream de audio de entrada, `ffmpeg` simplemente no produce audio de salida, sin fallar.
 
 **Re-correrlo es barato**: si `assets/proxies/<clip>.mp4` ya existe y es más nuevo (`mtime`) que `source/<clip>`, se salta el transcode entero. Corre en un **pool paralelo** (`PROXY_CONCURRENCY`, default `Math.max(1, Math.min(4, os.cpus().length - 2))` — el transcode con `libx264` es CPU-bound, así que se dejan al menos 2 núcleos libres para el resto del sistema, con tope de 4 para no saturar máquinas grandes). El progreso por clip (`pending`/`running`/`done`/`error`) se persiste en `progress/prep-progress.json` en cada transición; un error en un clip no aborta el resto.
 

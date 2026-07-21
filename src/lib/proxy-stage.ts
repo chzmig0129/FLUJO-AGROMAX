@@ -162,6 +162,12 @@ async function transcodeClip(srcFile: string, outFile: string): Promise<void> {
       "aac",
       "-b:a",
       "192k",
+      // '-f mp4' explícito: tmpOut termina en '.tmp' (no '.mp4'), así que
+      // ffmpeg no puede adivinar el contenedor de salida por extensión
+      // (falla con "Unable to find a suitable output format"). Verificado en
+      // la práctica corriendo la etapa sobre el job de prueba.
+      "-f",
+      "mp4",
       tmpOut,
     ]);
     await fs.rename(tmpOut, outFile);
@@ -208,13 +214,32 @@ export async function runProxyStage(jobId: string): Promise<void> {
   };
   await writePrepProgressJson(jobId, progress);
 
+  // Cola de escrituras: writePrepProgressJson() hace un `await fs.mkdir(...)`
+  // antes de escribir el JSON, dejando un punto de suspensión entre la
+  // mutación síncrona de `progress` y su persistencia. Con varios workers del
+  // pool mutando el MISMO objeto `progress` y llamando a esta función en
+  // paralelo, dos escrituras concurrentes pueden terminar en cualquier orden
+  // (no hay garantía de que la que empezó antes termine antes), y una
+  // escritura más lenta con un snapshot más viejo puede pisar en disco el
+  // resultado de una más nueva. Encadenamos cada escritura a la anterior en
+  // esta promise queue para que siempre corran en serie y en orden, cada una
+  // tomando el snapshot MÁS FRESCO de `progress` al momento de ejecutarse
+  // (no uno capturado de antemano), así ninguna actualización se pierde.
+  let writeChain: Promise<void> = Promise.resolve();
+  function enqueueProgressWrite(): Promise<void> {
+    writeChain = writeChain.then(() =>
+      writePrepProgressJson(jobId, { files: { ...progress.files } })
+    );
+    return writeChain;
+  }
+
   async function setStatus(
     clip: string,
     status: FileTranscriptStatus,
     error?: string
   ): Promise<void> {
     progress.files[clip] = error ? { status, error } : { status };
-    await writePrepProgressJson(jobId, progress);
+    await enqueueProgressWrite();
   }
 
   const concurrency = resolveConcurrency();
