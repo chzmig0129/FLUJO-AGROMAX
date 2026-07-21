@@ -1,11 +1,14 @@
 :root {
-  --color-bg: #f7f7f5;
+  --color-bg: #f7faf7;
   --color-surface: #ffffff;
   --color-border: #dcdcd6;
   --color-text: #1f2320;
   --color-muted: #6b7268;
-  --color-primary: #2f6d3a;
-  --color-primary-hover: #245529;
+  --color-green-light: #3dbe4b;
+  --color-green-dark: #0e8a4e;
+  --color-primary: var(--color-green-dark);
+  --color-primary-hover: #0b6f3f;
+  --color-accent: var(--color-green-light);
   --color-error-bg: #fdecec;
   --color-error-border: #f2b8b8;
   --color-error-text: #a12626;
@@ -29,6 +32,59 @@ body {
   background: var(--color-bg);
   color: var(--color-text);
   line-height: 1.5;
+}
+
+a {
+  color: var(--color-primary);
+}
+
+a:hover {
+  color: var(--color-primary-hover);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-green-light);
+  outline-offset: 2px;
+}
+
+/* Header de marca */
+.site-header {
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0.75rem 1.5rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.brand-logo {
+  height: 36px;
+  width: 36px;
+  object-fit: contain;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.brand-name {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--color-green-dark);
+}
+
+.brand-subtitle {
+  font-size: 0.72rem;
+  color: var(--color-muted);
 }
 
 .container {
@@ -94,8 +150,9 @@ textarea {
 .input:focus,
 .select:focus,
 textarea:focus {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-green-light);
   outline-offset: 1px;
+  border-color: var(--color-primary);
 }
 
 .field {
@@ -133,6 +190,11 @@ textarea:focus {
   letter-spacing: 0.02em;
   color: var(--color-muted);
   background: var(--color-bg);
+  border-bottom: 2px solid var(--color-accent);
+}
+
+.table tbody tr:hover {
+  background: rgba(61, 190, 75, 0.06);
 }
 
 .row {
@@ -142,6 +204,7 @@ textarea:focus {
   gap: 1rem;
   padding: 0.6rem 0.9rem;
   border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-accent);
   border-radius: var(--radius);
   background: var(--color-surface);
 }
