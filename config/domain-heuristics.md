@@ -24,6 +24,14 @@
 - Un retake es la misma toma repetida, a veces terminando en "perdón, otra vez".
 - Preferir la última versión completa de una toma repetida.
 
+## uso-de-broll
+
+- El B-roll con veredicto "broll" (imagen útil de apoyo visual, sin audio relevante) no debe quedarse fuera de la estructura del curso.
+- Debe ASIGNARSE como segment de apoyo visual dentro de la lección/módulo temáticamente afín, al final de esa lección.
+- El topic de ese segment debe llevar el prefijo "B-roll: <qué se ve>" (por ejemplo, "B-roll: aplicación de anestesia laparoscópica en oveja").
+- Decidir la lección afín usando el contexto: transcript/resumen del clip, decisiones previas y, si hace falta, los frames.
+- Solo el B-roll descartado (veredicto distinto de "broll" con decisión de descarte, basura, retake fallido, etc.) queda fuera de structure.json.
+
 ## basura-tipica
 
 - Texto alucinado repetido ("todo todo", "tú tú") suele indicar transcripción basura.

@@ -22,6 +22,7 @@ export const PLAN_AGENT_SYSTEM_PROMPT = `Eres el editor autónomo de AgroMax: un
 3. **Agrupar por tema**: junta clips y segmentos relacionados en módulos y lecciones coherentes.
 4. **Ordenar por pistas del instructor**: el instructor a veces declara el orden hablando ("como vimos antes", "más adelante veremos"); úsalo cuando esté disponible.
 5. **Detectar retakes**: si una toma se repite (el instructor la vuelve a grabar, a veces diciendo "perdón, otra vez"), prefiere la última versión completa y descarta o marca la anterior.
+6. **Ubicar el B-roll útil**: un clip con veredicto 'broll' NO se deja fuera de la estructura. Se ASIGNA como segmento de apoyo visual dentro de la lección/módulo temáticamente afín (decide la afinidad por tema, transcript y frames), colocado al final de esa lección, con \`topic\` prefijado "B-roll: <qué se ve>". Solo queda fuera de \`modules\` el material con veredicto 'descartar' u 'otro_curso'.
 
 Para CADA clip del job debes emitir un veredicto: 'leccion' (se usa dentro de la estructura), 'broll' (apoyo visual sin narración propia, útil como material de apoyo), 'descartar' (inservible) u 'otro_curso' (pertenece a un curso distinto al principal que estás armando).
 
@@ -41,7 +42,7 @@ Cuando termines de evaluar TODOS los clips y armar la estructura del curso, entr
 
 - \`courseTitle\`: título del curso principal.
 - \`verdicts\`: un veredicto por cada clip del job (incluyendo los descartados y los de otro curso), con \`confianza\` entre 0 y 1 y, si citaste una heurística, sus IDs en \`heuristicas\`.
-- \`modules\`: la estructura propuesta (módulos → lecciones → segmentos con rangos de tiempo del clip fuente).
+- \`modules\`: la estructura propuesta (módulos → lecciones → segmentos con rangos de tiempo del clip fuente). Incluye ahí, como segmento final de la lección afín, cada clip con veredicto 'broll' (topic "B-roll: <qué se ve>"); no lo omitas de la estructura.
 - \`decisionesMd\`: un documento en Markdown, en español, que explique tus decisiones para revisión humana. Si hubo clips con confianza menor a 0.6 (hayas pedido frames extra o no), la PRIMERA sección del documento debe titularse exactamente "⚠️ Baja confianza" y listar esos clips con su razón. Después de esa sección (si aplica), documenta el resto de decisiones relevantes: cursos separados, retakes descartados, criterios de orden, etc.
 
 No llames \`entregar_resultado\` más de una vez. No hay aprobación humana intermedia: tu entrega es la decisión final de esta etapa.

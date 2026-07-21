@@ -107,6 +107,7 @@ Actúa exactamente como este system prompt describe (adaptado de `src/lib/plan/p
 > 3. **Agrupar por tema**: junta clips y segmentos relacionados en módulos y lecciones coherentes.
 > 4. **Ordenar por pistas del instructor**: el instructor a veces declara el orden hablando ("como vimos antes", "más adelante veremos"); úsalo cuando esté disponible.
 > 5. **Detectar retakes**: si una toma se repite (el instructor la vuelve a grabar, a veces diciendo "perdón, otra vez"), prefiere la última versión completa y descarta o marca la anterior.
+> 6. **Ubicar el B-roll útil**: un clip con veredicto `broll` NO se deja fuera de la estructura. Se ASIGNA como segmento de apoyo visual dentro de la lección/módulo temáticamente afín (decide la afinidad por tema, transcript y frames), colocado al final de esa lección, con `topic` prefijado "B-roll: <qué se ve>". Solo queda fuera de `modules` (en `apartados`) el material con veredicto `descartar` u `otro_curso`.
 >
 > Para CADA clip del job debes emitir un veredicto: `leccion` (se usa dentro de la estructura), `broll` (apoyo visual sin narración propia, útil como material de apoyo), `descartar` (inservible) u `otro_curso` (pertenece a un curso distinto al principal que estás armando).
 >
@@ -192,7 +193,7 @@ interface StructureJson {
 }
 ```
 
-`apartados` es exactamente el subconjunto de `verdicts` con `verdict === "descartar" || verdict === "otro_curso"` — no un resumen, los objetos `Verdict` completos. Ejemplo corto:
+`apartados` es exactamente el subconjunto de `verdicts` con `verdict === "descartar" || verdict === "otro_curso"` — no un resumen, los objetos `Verdict` completos. Los clips con `verdict === "broll"` NO van en `apartados`: van dentro de `modules`, como el ÚLTIMO segment de la lección temáticamente afín, con `topic` prefijado `"B-roll: <qué se ve>"`. Ejemplo corto:
 
 ```json
 {
@@ -337,5 +338,5 @@ Corre este snippet con `node -e "..."` (con el `path` real de tu job, no una int
 - `jobs/$ARGUMENTS/source/` es intocable: NUNCA escribas, muevas ni borres nada ahí. Solo se usa como entrada de lectura para `ffmpeg` en el paso 3.
 - `jobs/$ARGUMENTS/transcripts/` es intocable: NUNCA la modifiques. Solo se lee.
 - `jobs/$ARGUMENTS/frames/manifest.json` solo se ACTUALIZA (merge aditivo, nunca se borran entradas existentes) cuando extraes frames extra en el paso 3; nunca lo reescribas desde cero perdiendo lo que ya había.
-- `apartados` en `structure.json` SOLO excluye clips de la estructura principal (`descartar`/`otro_curso`) — no filtra ni oculta información, es trazabilidad completa: cada `Verdict` sigue existiendo en `verdicts.json` también.
+- `apartados` en `structure.json` SOLO excluye clips de la estructura principal (`descartar`/`otro_curso`) — no filtra ni oculta información, es trazabilidad completa: cada `Verdict` sigue existiendo en `verdicts.json` también. Los clips `broll` NO van en `apartados`: se asignan dentro de `modules` como segment (ver heurística `uso-de-broll` en `config/domain-heuristics.md`).
 - No llames a ninguna API de Anthropic ni uses tokens de facturación: todo el razonamiento lo haces tú, la sesión de Claude Code, con tus herramientas normales (Read/Bash/Write).
