@@ -40,7 +40,7 @@ export default function HomePage() {
   return (
     <main className="container">
       <h1>AgroMax Ingesta</h1>
-      <p>Subí el ZIP con los videos crudos y el nombre del curso para comenzar.</p>
+      <p>Subí el ZIP con los videos crudos para comenzar.</p>
 
       {error && <div className="error-banner">{error}</div>}
 
@@ -54,18 +54,6 @@ export default function HomePage() {
             accept=".zip"
             required
             className="input"
-          />
-        </div>
-
-        <div className="field">
-          <label htmlFor="name">Nombre del curso</label>
-          <input
-            id="name"
-            name="name"
-            type="text"
-            required
-            className="input"
-            placeholder="Ej: Manejo de suelos"
           />
         </div>
 

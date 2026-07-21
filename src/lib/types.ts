@@ -1,7 +1,7 @@
 /**
  * Contrato de datos compartido por la etapa 1 (ingesta) del pipeline AgroMax.
  * Estos tipos son usados tanto por el backend (rutas API, jobs.ts, probe.ts)
- * como por los componentes de UI que consumen job.json / order.json.
+ * como por los componentes de UI que consumen job.json.
  */
 
 /**
@@ -28,7 +28,7 @@ export interface VideoFileMeta {
 /**
  * Estado general de un job de ingesta.
  * - 'processing': se está analizando el ZIP subido (ffprobe en curso).
- * - 'ingested': el usuario confirmó el orden/títulos (order.json escrito).
+ * - 'ingested': el ZIP fue extraído y analizado con éxito.
  * - 'error': ocurrió un error irrecuperable durante la ingesta.
  */
 export type JobStatus = "processing" | "ingested" | "error";
@@ -46,20 +46,4 @@ export interface JobJson {
   updatedAt: string;
   config: Record<string, never>;
   files: VideoFileMeta[];
-}
-
-/**
- * Entrada individual del orden final de videos: qué archivo y con qué título.
- */
-export interface OrderEntry {
-  file: string;
-  title: string;
-}
-
-/**
- * Representación persistida en jobs/<id>/order.json, generada al confirmar
- * el orden/títulos definidos por el usuario en la UI.
- */
-export interface OrderJson {
-  order: OrderEntry[];
 }

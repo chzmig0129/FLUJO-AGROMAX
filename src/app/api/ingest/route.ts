@@ -1,12 +1,14 @@
 /**
  * POST /api/ingest — recibe un ZIP de videos crudos y produce un job.
  *
- * Flujo: valida el multipart/form-data (zip + name), crea jobs/<id>/,
+ * Flujo: valida el multipart/form-data (zip), crea jobs/<id>/,
  * guarda el ZIP subido, extrae los videos a jobs/<id>/source/ (que queda
  * inmutable desde este punto en adelante — ver invariante en lib/jobs.ts),
  * borra el ZIP temporal, analiza los videos con ffprobe y persiste
- * job.json + order.json inicial. Cualquier error después de crear el
- * directorio del job limpia jobs/<id>/ por completo antes de responder.
+ * job.json. El nombre del proyecto se deriva automáticamente del nombre
+ * del archivo ZIP subido (sin extensión), sin input manual del usuario.
+ * Cualquier error después de crear el directorio del job limpia
+ * jobs/<id>/ por completo antes de responder.
  *
  * Server-only: corre en runtime Node.js (no Edge) porque usa fs, child_process
  * (ffprobe) y yauzl, ninguno de los cuales está disponible en el Edge runtime.
@@ -14,10 +16,10 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { NextResponse } from "next/server";
-import { createJobDir, jobPath, sourcePath, writeJobJson, writeOrderJson } from "@/lib/jobs";
+import { createJobDir, jobPath, sourcePath, writeJobJson } from "@/lib/jobs";
 import { extractVideosFromZip } from "@/lib/zip";
 import { probeAll } from "@/lib/probe";
-import type { JobJson, OrderEntry } from "@/lib/types";
+import type { JobJson } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -33,7 +35,6 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const zip = formData.get("zip");
-  const name = formData.get("name");
 
   if (!(zip instanceof File)) {
     return NextResponse.json(
@@ -41,12 +42,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       { status: 400 }
     );
   }
-  if (typeof name !== "string" || name.trim().length === 0) {
-    return NextResponse.json(
-      { error: "Falta el nombre del curso" },
-      { status: 400 }
-    );
-  }
+
+  // El nombre del proyecto se deriva del nombre del archivo ZIP subido.
+  const name = path.basename(zip.name, path.extname(zip.name));
 
   const id = crypto.randomUUID();
 
@@ -61,7 +59,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     // Extraemos los videos a source/, que queda inmutable desde aquí en
     // adelante (ver invariante documentada en lib/jobs.ts).
-    const extractedFiles = await extractVideosFromZip(uploadZipPath, sourcePath(id));
+    await extractVideosFromZip(uploadZipPath, sourcePath(id));
 
     // El ZIP subido no es parte del job final: solo era un paso intermedio.
     await fs.rm(uploadZipPath, { force: true });
@@ -80,15 +78,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       files,
     };
     await writeJobJson(job);
-
-    // Orden inicial: alfabético por nombre de archivo, título = nombre sin extensión.
-    const order: OrderEntry[] = [...extractedFiles]
-      .sort((a, b) => a.localeCompare(b))
-      .map((file) => ({
-        file,
-        title: path.basename(file, path.extname(file)),
-      }));
-    await writeOrderJson(id, { order });
 
     return NextResponse.json({ jobId: id, files });
   } catch (err) {

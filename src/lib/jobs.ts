@@ -4,18 +4,17 @@
  * Estructura en disco:
  *   jobs/<id>/source/    archivos de video originales, tal como se extraen del ZIP
  *   jobs/<id>/job.json   metadata del job (JobJson)
- *   jobs/<id>/order.json orden/títulos confirmados por el usuario (OrderJson)
  *
  * INVARIANTE IMPORTANTE: jobs/<id>/source/ es inmutable una vez creada en la
- * ingesta. Ningún código posterior (confirm, etapas futuras del pipeline)
- * debe escribir, mover ni borrar archivos dentro de source/. Solo se leen.
+ * ingesta. Ningún código posterior (etapas futuras del pipeline) debe
+ * escribir, mover ni borrar archivos dentro de source/. Solo se leen.
  *
  * Este módulo es server-only: usa node:fs/promises y node:path, por lo que
  * nunca debe importarse desde código de cliente (componentes "use client").
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { JobJson, OrderJson } from "./types";
+import type { JobJson } from "./types";
 
 /** Raíz absoluta donde viven todos los jobs (jobs/ en la raíz del proyecto). */
 export const JOBS_ROOT = path.join(process.cwd(), "jobs");
@@ -33,11 +32,6 @@ export function sourcePath(id: string): string {
 /** Ruta absoluta a job.json de un job. */
 function jobJsonPath(id: string): string {
   return path.join(jobPath(id), "job.json");
-}
-
-/** Ruta absoluta a order.json de un job. */
-function orderJsonPath(id: string): string {
-  return path.join(jobPath(id), "order.json");
 }
 
 /**
@@ -77,12 +71,4 @@ export async function readJobJson(id: string): Promise<JobJson> {
   } catch {
     throw new Error(`Proyecto no encontrado: no existe el job "${id}"`);
   }
-}
-
-/**
- * Escribe (o sobrescribe) order.json con el orden/títulos confirmados por
- * el usuario. No toca job.json ni source/.
- */
-export async function writeOrderJson(id: string, order: OrderJson): Promise<void> {
-  await fs.writeFile(orderJsonPath(id), JSON.stringify(order, null, 2), "utf-8");
 }
