@@ -10,4 +10,5 @@ next-env.d.ts
 npm-debug.log*
 
 # Job data (etapa 1 ingesta)
-jobs/
+/jobs/
+tsconfig.tsbuildinfo
