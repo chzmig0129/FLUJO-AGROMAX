@@ -1,7 +1,8 @@
 /**
  * GET /api/jobs/[jobId] — devuelve la metadata del job (job.json), más el
- * progreso de transcripción, la metadata de probe y el resumen final si ya
- * existen, para que la UI pueda pollear un único endpoint.
+ * progreso de transcripción, la metadata de probe, el resumen final y el
+ * manifest de frames si ya existen, para que la UI pueda pollear un único
+ * endpoint.
  *
  * Nota: esta ruta es solo lectura. Nunca toca jobs/<id>/source/, que es
  * inmutable una vez creada la ingesta (ver invariante en src/lib/jobs.ts).
@@ -9,7 +10,13 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { NextResponse } from "next/server";
-import { readJobJson, readMediaJson, readProgressJson, transcriptsDir } from "@/lib/jobs";
+import {
+  readFramesManifest,
+  readJobJson,
+  readMediaJson,
+  readProgressJson,
+  transcriptsDir,
+} from "@/lib/jobs";
 
 export const runtime = "nodejs";
 
@@ -39,13 +46,14 @@ export async function GET(
 
   try {
     const job = await readJobJson(jobId);
-    const [media, progress, summary] = await Promise.all([
+    const [media, progress, summary, manifest] = await Promise.all([
       readMediaJson(jobId),
       readProgressJson(jobId),
       readSummaryJson(jobId),
+      readFramesManifest(jobId),
     ]);
 
-    return NextResponse.json({ job, media, progress, summary });
+    return NextResponse.json({ job, media, progress, summary, manifest });
   } catch {
     return NextResponse.json(
       { error: "Proyecto no encontrado" },
