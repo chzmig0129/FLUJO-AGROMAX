@@ -15,6 +15,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type {
+  FramesManifest,
   JobJson,
   JobStatus,
   MediaInfo,
@@ -53,6 +54,16 @@ export function transcriptsDir(id: string): string {
 /** Ruta absoluta a probe/media.json de un job. */
 export function mediaJsonPath(id: string): string {
   return path.join(probeDir(id), "media.json");
+}
+
+/** Ruta absoluta al subdirectorio de salida de la etapa de muestreo de frames. */
+export function framesDir(id: string): string {
+  return path.join(jobPath(id), "frames");
+}
+
+/** Ruta absoluta a frames/manifest.json de un job. */
+export function manifestPath(id: string): string {
+  return path.join(framesDir(id), "manifest.json");
 }
 
 /** Ruta absoluta a progress/progress.json de un job. */
@@ -167,6 +178,37 @@ export async function readProgressJson(
 }
 
 /**
+ * Escribe (o sobrescribe) frames/manifest.json de un job. Crea frames/ de
+ * forma recursiva si todavía no existe.
+ */
+export async function writeFramesManifest(
+  id: string,
+  manifest: FramesManifest
+): Promise<void> {
+  await fs.mkdir(framesDir(id), { recursive: true });
+  await fs.writeFile(
+    manifestPath(id),
+    JSON.stringify(manifest, null, 2),
+    "utf-8"
+  );
+}
+
+/**
+ * Lee frames/manifest.json de un job. Devuelve null si todavía no existe
+ * (job que aún no llegó a la etapa de muestreo) en vez de lanzar un error.
+ */
+export async function readFramesManifest(
+  id: string
+): Promise<FramesManifest | null> {
+  try {
+    const raw = await fs.readFile(manifestPath(id), "utf-8");
+    return JSON.parse(raw) as FramesManifest;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Mergea el timing existente de una etapa con un patch parcial (por ejemplo
  * solo finishedAt), sin perder el startedAt ya guardado. Si no hay timing
  * previo ni el patch trae startedAt, no hay nada consistente que guardar.
@@ -203,6 +245,7 @@ export async function updateJobStatus(
     stages?: {
       probe?: { startedAt?: string; finishedAt?: string };
       transcribe?: { startedAt?: string; finishedAt?: string };
+      frames?: { startedAt?: string; finishedAt?: string };
     };
     errorMessage?: string;
   }
@@ -215,6 +258,10 @@ export async function updateJobStatus(
         transcribe: mergeStageTiming(
           current.stages?.transcribe,
           extra.stages.transcribe
+        ),
+        frames: mergeStageTiming(
+          current.stages?.frames,
+          extra.stages.frames
         ),
       }
     : current.stages;

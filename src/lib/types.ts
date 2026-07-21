@@ -27,12 +27,14 @@ export interface VideoFileMeta {
 
 /**
  * Estado general de un job a través de todo el pipeline (ingesta → probe →
- * transcripción).
+ * transcripción → muestreo de frames).
  * - 'ingested': el ZIP fue extraído y analizado con éxito (etapa 1 lista).
  * - 'probing': corriendo ffprobe sobre los archivos de source/ (etapa 2).
  * - 'probed': probe/media.json fue generado con éxito.
  * - 'transcribing': corriendo el motor de transcripción (etapa 3).
  * - 'transcribed': transcripts/ fue generado con éxito.
+ * - 'sampling': corriendo la extracción de frames de referencia con ffmpeg (etapa 3.5).
+ * - 'sampled': frames/ y frames/manifest.json fueron generados con éxito.
  * - 'error': ocurrió un error irrecuperable en cualquier etapa del pipeline.
  */
 export type JobStatus =
@@ -41,6 +43,8 @@ export type JobStatus =
   | "probed"
   | "transcribing"
   | "transcribed"
+  | "sampling"
+  | "sampled"
   | "error";
 
 /**
@@ -70,6 +74,7 @@ export interface JobJson {
   stages?: {
     probe?: StageTiming;
     transcribe?: StageTiming;
+    frames?: StageTiming;
   };
   errorMessage?: string;
 }
@@ -109,4 +114,36 @@ export interface ProgressJson {
       error?: string;
     }
   >;
+}
+
+/**
+ * Un frame JPG extraído de un clip en la etapa de muestreo (3.5).
+ * `timeSeconds` es el instante (redondeado a segundo entero) del video del
+ * que se extrajo; `file` es la ruta relativa a jobs/<id>/frames/, por ejemplo
+ * "<clip sin extensión>/frame_0012.jpg".
+ */
+export interface FrameEntry {
+  timeSeconds: number;
+  file: string;
+}
+
+/**
+ * Resultado del muestreo de un clip individual dentro de frames/manifest.json.
+ * `narration` indica si el clip tenía narración (lo que determina la
+ * estrategia de muestreo usada: 4 puntos fijos vs. muestreo denso).
+ */
+export interface ManifestClip {
+  filename: string;
+  narration: boolean;
+  durationSeconds: number;
+  frames: FrameEntry[];
+}
+
+/**
+ * Representación persistida de jobs/<id>/frames/manifest.json: el resultado
+ * completo de la etapa de muestreo de frames para todos los clips del job.
+ */
+export interface FramesManifest {
+  generatedAt: string;
+  clips: ManifestClip[];
 }

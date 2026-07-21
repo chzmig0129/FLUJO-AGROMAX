@@ -1,15 +1,18 @@
 /**
  * pipeline.ts — orquestador del pipeline completo de un job: probe →
- * transcripción. Pensado para correr en background (el llamador NO debe
- * hacer await de runPipeline en un request HTTP; es fire-and-forget).
+ * transcripción → muestreo de frames. Pensado para correr en background (el
+ * llamador NO debe hacer await de runPipeline en un request HTTP; es
+ * fire-and-forget).
  *
- * Es idempotente: correrlo de nuevo sobre un job ya probado/transcrito
- * simplemente vuelve a correr probe y transcribe, sobreescribiendo
- * probe/media.json y transcripts/.
+ * Es idempotente: correrlo de nuevo sobre un job ya probado/transcrito/
+ * muestreado simplemente vuelve a correr probe, transcribe y frames,
+ * sobreescribiendo probe/media.json, transcripts/ y frames/.
  */
-import { updateJobStatus } from "./jobs";
+import { runFramesStage } from "./frames-stage";
+import { readJobJson, updateJobStatus } from "./jobs";
 import { runProbeStage } from "./probe-stage";
 import { runTranscribeStage } from "./transcribe/index";
+import type { JobStatus } from "./types";
 
 /**
  * Registro en memoria de pipelines corriendo, para evitar disparar dos
@@ -66,9 +69,75 @@ async function executePipeline(jobId: string): Promise<void> {
     await updateJobStatus(jobId, "transcribed", {
       stages: { transcribe: { finishedAt: new Date().toISOString() } },
     });
+
+    // Etapa 3.5: muestreo de frames de referencia.
+    await updateJobStatus(jobId, "sampling", {
+      stages: { frames: { startedAt: new Date().toISOString() } },
+    });
+    await runFramesStage(jobId);
+    await updateJobStatus(jobId, "sampled", {
+      stages: { frames: { finishedAt: new Date().toISOString() } },
+    });
   } catch (err) {
     const errorMessage =
       err instanceof Error ? err.message : "Error desconocido en el pipeline";
+    await updateJobStatus(jobId, "error", { errorMessage });
+  }
+}
+
+/**
+ * Estados a partir de los cuales tiene sentido (re)correr solo la etapa de
+ * frames: el job ya tiene transcripts/ generado (o incluso ya pasó por la
+ * etapa de muestreo antes, lo cual es válido para re-muestrear).
+ */
+const FRAMES_READY_STATUSES: JobStatus[] = [
+  "transcribed",
+  "sampling",
+  "sampled",
+];
+
+/**
+ * Corre solo la etapa de muestreo de frames para un job ya transcrito
+ * (permite re-muestrear sin volver a correr probe/transcribe). Reutiliza el
+ * mismo registro `running` que runPipeline para evitar corridas concurrentes
+ * del mismo job, sea cual sea la etapa que las disparó.
+ */
+export function runFramesOnly(jobId: string): Promise<void> {
+  const existing = running.get(jobId);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = executeFramesOnly(jobId).finally(() => {
+    running.delete(jobId);
+  });
+
+  running.set(jobId, promise);
+  return promise;
+}
+
+/** Ejecuta únicamente la etapa de frames, validando el status previo del job. */
+async function executeFramesOnly(jobId: string): Promise<void> {
+  try {
+    const current = await readJobJson(jobId);
+    if (!FRAMES_READY_STATUSES.includes(current.status)) {
+      throw new Error(
+        `No se puede muestrear frames: el job "${jobId}" debe estar transcrito primero (status actual: "${current.status}")`
+      );
+    }
+
+    await updateJobStatus(jobId, "sampling", {
+      stages: { frames: { startedAt: new Date().toISOString() } },
+    });
+    await runFramesStage(jobId);
+    await updateJobStatus(jobId, "sampled", {
+      stages: { frames: { finishedAt: new Date().toISOString() } },
+    });
+  } catch (err) {
+    const errorMessage =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido en el muestreo de frames";
     await updateJobStatus(jobId, "error", { errorMessage });
   }
 }
