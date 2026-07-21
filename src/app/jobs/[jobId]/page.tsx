@@ -163,12 +163,14 @@ export default function JobPage() {
    * consulta 2s después. Se usa tanto al montar como después de disparar
    * una re-transcripción o un (re)muestreo de frames.
    *
-   * Nota: el status 'transcribed' NO se considera terminal acá — el
+   * Nota: el status 'transcribed' NO se considera terminal en general — el
    * pipeline nuevo lo atraviesa de forma transitoria camino a 'sampling'.
-   * Para jobs viejos que quedan estancados en 'transcribed' (sin manifest,
-   * sin pipeline corriendo), la UI simplemente sigue pollenado en segundo
-   * plano cada 2s mientras ofrece el botón "Muestrear frames" para que el
-   * usuario dispare la etapa manualmente.
+   * Pero un job estancado en 'transcribed' sin manifest (jobs viejos, o
+   * mientras el usuario no dispara el muestreo) es un estado ESTABLE: nada
+   * lo va a mover sin acción del usuario, así que ahí SÍ paramos el polling
+   * en segundo plano para no pegarle a la API cada 2s indefinidamente. El
+   * botón "Muestrear frames" (handleSample) reanuda el polling al hacer el
+   * POST que dispara la etapa.
    */
   const startPolling = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -180,7 +182,10 @@ export default function JobPage() {
       if (cancelled) return;
 
       const status = body?.job.status;
-      const finished = status === "sampled" || status === "error";
+      const stableWithoutManifest =
+        status === "transcribed" && body?.manifest === null;
+      const finished =
+        status === "sampled" || status === "error" || stableWithoutManifest;
       if (!finished) {
         timerRef.current = setTimeout(tick, POLL_INTERVAL_MS);
       }

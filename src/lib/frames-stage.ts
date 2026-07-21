@@ -108,13 +108,24 @@ function computeTimestamps(narration: boolean, durationSeconds: number): number[
 }
 
 /**
- * Redondea a segundo entero (nombre de archivo/manifest en enteros) y quita
- * duplicados que puedan surgir del redondeo, preservando el orden.
+ * Redondea a segundo entero (nombre de archivo/manifest en enteros), quita
+ * duplicados que puedan surgir del redondeo, preservando el orden, y luego
+ * clampea cada timestamp a Math.max(0, Math.floor(durationSeconds) - 1).
+ *
+ * El redondeo (Math.round) puede sumar hasta +0.5s a un timestamp crudo. Si
+ * ese timestamp ya estaba pegado al final del clip (ej. la ventana B-roll
+ * termina en duracion-0.5), el redondeo lo puede empujar a/pasado la
+ * duración total (ej. 24.5 -> 25 en un clip de 25.0s). ffmpeg -ss en/tras el
+ * EOF falla silenciosamente y ese frame se descarta, reduciendo el conteo
+ * sin avisar. Clampeamos después de redondear y volvemos a deduplicar
+ * (el clamp puede generar nuevos duplicados) para evitarlo.
  */
-function roundAndDedup(timestamps: number[]): number[] {
+function roundAndDedup(timestamps: number[], durationSeconds: number): number[] {
+  const maxTimestamp = Math.max(0, Math.floor(durationSeconds) - 1);
   const rounded = timestamps
     .map((t) => Math.max(0, Math.round(t)))
-    .filter((t) => Number.isFinite(t));
+    .filter((t) => Number.isFinite(t))
+    .map((t) => Math.min(t, maxTimestamp));
   return Array.from(new Set(rounded));
 }
 
@@ -208,7 +219,10 @@ export async function runFramesStage(jobId: string): Promise<FramesManifest> {
     // narrado ultracorto— caemos al punto medio del clip. Un clip sin ningún
     // frame deja ciego al agente que consume el manifest, que es justo lo
     // que esta etapa existe para evitar: mejor 1 frame de compromiso que 0.
-    let timestamps = roundAndDedup(computeTimestamps(narration, durationSeconds));
+    let timestamps = roundAndDedup(
+      computeTimestamps(narration, durationSeconds),
+      durationSeconds
+    );
     if (timestamps.length === 0) {
       timestamps = [Math.max(0, Math.round(durationSeconds / 2))];
     }
