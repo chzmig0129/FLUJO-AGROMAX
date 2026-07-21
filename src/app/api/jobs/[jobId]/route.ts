@@ -1,9 +1,10 @@
 /**
  * GET /api/jobs/[jobId] — devuelve la metadata del job (job.json), más el
  * progreso de transcripción, la metadata de probe, el resumen final, el
- * manifest de frames y los artefactos de la etapa de plan (structure, audit,
- * verdicts y decisiones.md) si ya existen, para que la UI pueda pollear un
- * único endpoint.
+ * manifest de frames, los artefactos de la etapa de plan (structure, audit,
+ * verdicts y decisiones.md) y los artefactos de las etapas de preparación
+ * (5A/5B/5C: silence, cuts y prepProgress) si ya existen, para que la UI
+ * pueda pollear un único endpoint.
  *
  * Nota: esta ruta es solo lectura. Nunca toca jobs/<id>/source/, que es
  * inmutable una vez creada la ingesta (ver invariante en src/lib/jobs.ts).
@@ -13,11 +14,14 @@ import path from "node:path";
 import { NextResponse } from "next/server";
 import {
   readAuditJson,
+  readCutsFiles,
   readDecisionesMd,
   readFramesManifest,
   readJobJson,
   readMediaJson,
+  readPrepProgressJson,
   readProgressJson,
+  readSilenceJson,
   readStructureJson,
   readVerdictsJson,
   transcriptsDir,
@@ -60,6 +64,9 @@ export async function GET(
       audit,
       verdicts,
       decisiones,
+      silence,
+      cuts,
+      prepProgress,
     ] = await Promise.all([
       readMediaJson(jobId),
       readProgressJson(jobId),
@@ -72,6 +79,14 @@ export async function GET(
       readAuditJson(jobId),
       readVerdictsJson(jobId),
       readDecisionesMd(jobId),
+      // Artefactos de las etapas de preparación (5A/5B/5C): lecturas
+      // tolerantes, devuelven null/[] si el job todavía no llegó a esa
+      // etapa. readCutsFiles ya devuelve [] tolerante, así que se normaliza
+      // a null cuando está vacío para que la UI distinga "sin cortes
+      // todavía" de "lista vacía por alguna razón rara".
+      readSilenceJson(jobId),
+      readCutsFiles(jobId),
+      readPrepProgressJson(jobId),
     ]);
 
     return NextResponse.json({
@@ -84,6 +99,9 @@ export async function GET(
       audit,
       verdicts,
       decisiones,
+      silence,
+      cuts: cuts.length > 0 ? cuts : null,
+      prepProgress,
     });
   } catch {
     return NextResponse.json(

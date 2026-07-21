@@ -28,15 +28,30 @@
  * re-transcribir)" — útil cuando la falla fue solo de la etapa de plan (ej.
  * ANTHROPIC_API_KEY ausente). El botón "Reintentar pipeline completo" sigue
  * disponible para fallas anteriores (probe/transcribe/frames).
+ *
+ * Un job en 'planned' es, igual que 'sampled' antes de él, un estado
+ * ESTABLE de reposo: se ofrece el botón "Preparar corte (silencio + proxies
+ * + cortes)" para disparar POST /api/jobs/<id>/prep (etapas 5A/5B/5C). Una
+ * vez que 'preparing' arranca, el 6º paso del stepper muestra un
+ * sub-progreso de proxies (X/N) leído de prepProgress.files, y al llegar a
+ * 'prepared' se muestra la sección de resultados: tabla de silencio/shrink
+ * por clip y, por lección, cantidad de cortes y duración cruda vs.
+ * proyectada, con el detalle de cada corte expandible. El botón se vuelve
+ * "Re-preparar corte" una vez que ya hay resultados. Si el job cae en
+ * 'error' pero ya tiene plan/structure.json (el prerequisito real de la
+ * preparación), se ofrece "Reintentar preparación" para reintentar solo
+ * 5A/5B/5C sin re-planear.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import type {
   AuditJson,
+  CutsFile,
   FramesManifest,
   JobJson,
   MediaInfo,
   ProgressJson,
+  SilenceJson,
   StructureJson,
   Verdict,
 } from "@/lib/types";
@@ -63,12 +78,15 @@ interface JobApiResponse {
   audit: AuditJson | null;
   verdicts: Verdict[] | null;
   decisiones: string | null;
+  silence: SilenceJson | null;
+  cuts: CutsFile[] | null;
+  prepProgress: ProgressJson | null;
 }
 
 const POLL_INTERVAL_MS = 2000;
 
 /** Etapas mostradas en el stepper, en orden. */
-type StepKey = "ingest" | "probe" | "transcribe" | "sample" | "plan";
+type StepKey = "ingest" | "probe" | "transcribe" | "sample" | "plan" | "prep";
 
 /**
  * Deriva el estado de cada etapa del stepper ('done' | 'active' | 'pending' |
@@ -83,7 +101,14 @@ function stepStatus(
     // quedan pendientes. Sin más info que job.status, marcamos como error
     // solo la etapa "actual" según el orden esperado y dejamos las previas
     // como completas.
-    const order: StepKey[] = ["ingest", "probe", "transcribe", "sample", "plan"];
+    const order: StepKey[] = [
+      "ingest",
+      "probe",
+      "transcribe",
+      "sample",
+      "plan",
+      "prep",
+    ];
     const failedIndex = order.findIndex((s) => s === step);
     // No sabemos con certeza en qué etapa fue el error; usamos una heurística
     // simple: si aún no hay media.json asumimos que falló en probe, si ya
@@ -125,10 +150,21 @@ function stepStatus(
     return "pending"; // ingested, probing, probed, transcribing, transcribed
   }
 
-  // step === 'plan'
-  if (status === "planning") return "active";
-  if (status === "planned") return "done";
-  return "pending"; // cualquier etapa previa a 'planning'
+  if (step === "plan") {
+    if (status === "planning") return "active";
+    if (
+      status === "planned" ||
+      status === "preparing" ||
+      status === "prepared"
+    )
+      return "done";
+    return "pending"; // cualquier etapa previa a 'planning'
+  }
+
+  // step === 'prep'
+  if (status === "preparing") return "active";
+  if (status === "prepared") return "done";
+  return "pending"; // cualquier etapa previa a 'preparing'
 }
 
 const STEP_LABELS: Record<StepKey, string> = {
@@ -137,6 +173,7 @@ const STEP_LABELS: Record<StepKey, string> = {
   transcribe: "Transcribiendo",
   sample: "Muestreando frames",
   plan: "Estructurando (agente)",
+  prep: "Preparando corte",
 };
 
 /** Etiqueta en español del veredicto del agente para el badge de cada clip. */
@@ -189,6 +226,8 @@ export default function JobPage() {
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [prepError, setPrepError] = useState<string | null>(null);
   const [showMaster, setShowMaster] = useState(false);
   const [masterText, setMasterText] = useState<string | null>(null);
   const [masterLoading, setMasterLoading] = useState(false);
@@ -233,6 +272,10 @@ export default function JobPage() {
    * Lo mismo aplica a 'sampled': es estable mientras el usuario no dispare
    * la etapa de plan (handlePlan reanuda el polling). Una vez que 'planning'
    * arranca, el polling sigue hasta 'planned' o 'error'.
+   *
+   * Y lo mismo aplica a 'planned': es estable mientras el usuario no
+   * dispare la preparación (handlePrep reanuda el polling). Una vez que
+   * 'preparing' arranca, el polling sigue hasta 'prepared' o 'error'.
    */
   const startPolling = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -249,6 +292,7 @@ export default function JobPage() {
       const finished =
         status === "sampled" ||
         status === "planned" ||
+        status === "prepared" ||
         status === "error" ||
         stableWithoutManifest;
       if (!finished) {
@@ -370,6 +414,43 @@ export default function JobPage() {
     }
   }, [jobId, startPolling]);
 
+  /**
+   * Dispara (o re-dispara) las etapas deterministas de preparación (5A
+   * silencio, 5B proxies, 5C cortes) vía POST /api/jobs/<id>/prep. Maneja
+   * 409 (pipeline ya corriendo) y 400 (status del job no permite preparar
+   * todavía) con mensajes específicos.
+   */
+  const handlePrep = useCallback(async () => {
+    setPrepError(null);
+    setPreparing(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/prep`, {
+        method: "POST",
+      });
+      if (res.status === 409) {
+        setPrepError("El proyecto ya se está procesando.");
+        return;
+      }
+      if (res.status === 400) {
+        const body = await res.json().catch(() => null);
+        setPrepError(
+          body?.error ?? "El proyecto todavía no puede prepararse."
+        );
+        return;
+      }
+      if (!res.ok) {
+        setPrepError("No se pudo iniciar la preparación del corte.");
+        return;
+      }
+      // Reanuda el polling de inmediato para reflejar el nuevo status.
+      startPolling();
+    } catch {
+      setPrepError("No se pudo iniciar la preparación del corte.");
+    } finally {
+      setPreparing(false);
+    }
+  }, [jobId, startPolling]);
+
   const handleToggleMaster = useCallback(async () => {
     const next = !showMaster;
     setShowMaster(next);
@@ -408,8 +489,19 @@ export default function JobPage() {
     );
   }
 
-  const { job, media, progress, summary, manifest, structure, audit, decisiones } =
-    data;
+  const {
+    job,
+    media,
+    progress,
+    summary,
+    manifest,
+    structure,
+    audit,
+    decisiones,
+    silence,
+    cuts,
+    prepProgress,
+  } = data;
   const isError = job.status === "error";
   // El job puede reintentar solo el plan (sin re-transcribir) si falló
   // estando en 'error' pero ya tiene los prerequisitos del plan generados
@@ -417,15 +509,24 @@ export default function JobPage() {
   // corrieron con éxito). Debe coincidir con el criterio tolerante de
   // hasPlanPrerequisites en src/lib/pipeline.ts.
   const canRetryPlanOnly = isError && manifest !== null;
+  // El job puede reintentar solo la preparación (sin re-planear) si falló
+  // estando en 'error' pero ya tiene el prerequisito real de la preparación
+  // generado en disco: plan/structure.json (proxy de que la etapa de plan
+  // terminó). Debe coincidir con el criterio tolerante de
+  // hasPrepPrerequisites en src/lib/pipeline.ts.
+  const canRetryPrepOnly = isError && structure !== null;
   // El resumen final se muestra en 'transcribed' (jobs viejos o mientras
-  // arranca el muestreo), 'sampled' (frames ya generados), y también
-  // 'planning'/'planned' (la etapa de plan corre después del muestreo, así
-  // que todo lo previo ya está disponible).
+  // arranca el muestreo), 'sampled' (frames ya generados), 'planning'/
+  // 'planned' (la etapa de plan corre después del muestreo) y también
+  // 'preparing'/'prepared' (las etapas 5A/5B/5C corren después del plan),
+  // ya que todo lo previo ya está disponible en cualquiera de esos estados.
   const isDone =
     job.status === "transcribed" ||
     job.status === "sampled" ||
     job.status === "planning" ||
-    job.status === "planned";
+    job.status === "planned" ||
+    job.status === "preparing" ||
+    job.status === "prepared";
   // Compat jobs viejos: sin manifest y sin estar corriendo el muestreo, se
   // ofrece el botón para dispararlo manualmente en vez de asumir que sigue
   // "procesando".
@@ -435,10 +536,25 @@ export default function JobPage() {
   // estable — se ofrece el botón para disparar la etapa de plan a demanda.
   const canPlan = job.status === "sampled" && structure === null;
   const canReplan = structure !== null;
+  // 'planned' sin cuts todavía es un estado estable — se ofrece el botón
+  // para disparar la preparación (5A/5B/5C) a demanda. Una vez que ya hay
+  // cuts (job 'prepared', o 'preparing' en curso), el botón pasa a
+  // "Re-preparar corte".
+  const canPrep = job.status === "planned" && cuts === null;
+  const canReprep = cuts !== null;
 
   const progressFiles = progress?.files ?? {};
   const totalFiles = job.files.length;
   const doneFiles = Object.values(progressFiles).filter(
+    (f) => f.status === "done" || f.status === "error"
+  ).length;
+
+  // Sub-progreso de proxies (5B) dentro de la etapa 'preparing': cuenta
+  // cuántos clips ya terminaron (done o error) sobre el total de clips que
+  // necesitan proxy, leído de progress/prep-progress.json.
+  const prepFiles = prepProgress?.files ?? {};
+  const prepTotalFiles = Object.keys(prepFiles).length;
+  const prepDoneFiles = Object.values(prepFiles).filter(
     (f) => f.status === "done" || f.status === "error"
   ).length;
 
@@ -469,6 +585,16 @@ export default function JobPage() {
                   : "Reintentar plan (sin re-transcribir)"}
               </button>
             )}
+            {canRetryPrepOnly && (
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={handlePrep}
+                disabled={preparing}
+              >
+                {preparing ? "Reintentando preparación…" : "Reintentar preparación"}
+              </button>
+            )}
             <button
               className="btn"
               type="button"
@@ -481,6 +607,7 @@ export default function JobPage() {
             </button>
           </div>
           {planError && <p className="stepper-error-msg">{planError}</p>}
+          {prepError && <p className="stepper-error-msg">{prepError}</p>}
           {retranscribeError && (
             <p className="stepper-error-msg">{retranscribeError}</p>
           )}
@@ -489,7 +616,7 @@ export default function JobPage() {
 
       <ol className="stepper">
         {(
-          ["ingest", "probe", "transcribe", "sample", "plan"] as StepKey[]
+          ["ingest", "probe", "transcribe", "sample", "plan", "prep"] as StepKey[]
         ).map((step) => {
           const status = stepStatus(step, job.status);
           return (
@@ -504,6 +631,10 @@ export default function JobPage() {
                 {step === "transcribe" &&
                   job.status === "transcribing" &&
                   ` (${doneFiles}/${totalFiles})`}
+                {step === "prep" &&
+                  job.status === "preparing" &&
+                  prepTotalFiles > 0 &&
+                  ` (proxies ${prepDoneFiles}/${prepTotalFiles})`}
               </span>
             </li>
           );
@@ -600,12 +731,27 @@ export default function JobPage() {
                     : "Generar estructura (agente)"}
               </button>
             )}
+            {(canPrep || canReprep) && (
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={handlePrep}
+                disabled={preparing}
+              >
+                {preparing
+                  ? "Preparando…"
+                  : canReprep
+                    ? "Re-preparar corte"
+                    : "Preparar corte (silencio + proxies + cortes)"}
+              </button>
+            )}
           </div>
           {retranscribeError && (
             <p className="stepper-error-msg">{retranscribeError}</p>
           )}
           {sampleError && <p className="stepper-error-msg">{sampleError}</p>}
           {planError && <p className="stepper-error-msg">{planError}</p>}
+          {prepError && <p className="stepper-error-msg">{prepError}</p>}
 
           <div>
             <button
@@ -864,6 +1010,118 @@ export default function JobPage() {
                   {audit.usage.cacheReadTokens} — {audit.framesCalls.length}{" "}
                   llamadas a frames extra
                 </p>
+              )}
+            </section>
+          )}
+
+          {(silence || cuts) && (
+            <section className="prep-section">
+              <h2>Preparación del corte</h2>
+              <p className="audit-hint">
+                Resultado de las etapas deterministas 5A/5B/5C: silencio
+                medido por clip, proxies de edición y cortes propuestos a
+                partir de los huecos de la transcripción. Todavía no hay
+                reproducción de video acá, solo los números y la lista de
+                cortes para auditar.
+              </p>
+
+              {silence && silence.clips.length > 0 && (
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Clip</th>
+                      <th>Silencios</th>
+                      <th>Seg. silentes</th>
+                      <th>Shrink</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {silence.clips.map((clip) => (
+                      <tr key={clip.filename}>
+                        <td>
+                          {clip.filename}
+                          {clip.skipped && (
+                            <span className="badge" title="Demo: sin recorte de silencio interno">
+                              {" "}
+                              🖐 demo sin recorte
+                            </span>
+                          )}
+                        </td>
+                        <td>{clip.count}</td>
+                        <td>{clip.totalSilentSeconds.toFixed(1)}s</td>
+                        <td>{(clip.shrinkRatio * 100).toFixed(1)}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {cuts && cuts.length > 0 && (
+                <div className="cuts-lessons">
+                  {cuts.map((cutsFile) => {
+                    const totalCuts = cutsFile.clips.reduce(
+                      (sum, c) => sum + c.cuts.length,
+                      0
+                    );
+                    const rawSeconds = cutsFile.clips.reduce(
+                      (sum, c) => sum + c.stats.rawSeconds,
+                      0
+                    );
+                    const projectedSeconds = cutsFile.clips.reduce(
+                      (sum, c) => sum + c.stats.projectedSeconds,
+                      0
+                    );
+                    return (
+                      <div className="row cuts-lesson-row" key={cutsFile.lessonId}>
+                        <div className="cuts-lesson-summary">
+                          <span className="structure-lesson-title">
+                            {cutsFile.lessonTitle}
+                          </span>
+                          <span className="badge">{totalCuts} cortes</span>
+                          <span className="badge">
+                            {formatTimestamp(rawSeconds)} →{" "}
+                            {formatTimestamp(projectedSeconds)}
+                          </span>
+                        </div>
+                        <details className="cuts-details">
+                          <summary>Ver cortes por clip</summary>
+                          {cutsFile.clips.map((clip, clipIdx) => (
+                            <div
+                              className="cuts-clip"
+                              key={`${clip.clip}-${clipIdx}`}
+                            >
+                              <p className="cuts-clip-title">
+                                <span className="badge">{clip.clip}</span>{" "}
+                                {clip.kind === "demo" && (
+                                  <span className="badge">🖐 demo</span>
+                                )}
+                              </p>
+                              {clip.cuts.length === 0 ? (
+                                <p className="cuts-empty">Sin cortes.</p>
+                              ) : (
+                                <ul className="cuts-list">
+                                  {clip.cuts.map((cut, cutIdx) => (
+                                    <li key={`${cut.startFrame}-${cutIdx}`}>
+                                      frames {cut.startFrame}–{cut.endFrame} (
+                                      {formatTimestamp(cut.startSeconds)}–
+                                      {formatTimestamp(cut.endSeconds)})
+                                      {cut.confirmedBySilence && (
+                                        <span className="badge">
+                                          {" "}
+                                          ✓ silencio
+                                        </span>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          ))}
+                        </details>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </section>
           )}

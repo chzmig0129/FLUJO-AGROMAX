@@ -1,12 +1,13 @@
-# AgroMax — Ingesta, Probe, Transcripción, Muestreo de Frames y Plan autónomo (Etapas 1-4)
+# AgroMax — Ingesta, Probe, Transcripción, Muestreo de Frames, Plan autónomo y Preparación de corte (Etapas 1-5)
 
-AgroMax es un pipeline que convierte video crudo en un curso online. Este repositorio implementa las primeras **cuatro etapas**:
+AgroMax es un pipeline que convierte video crudo en un curso online. Este repositorio implementa las primeras **cinco etapas**:
 
 1. **Ingesta**: recibe un ZIP de videos crudos, lo extrae y analiza cada archivo con `ffprobe`.
 2. **Probe**: mide metadata técnica determinista de cada video (resolución, fps, codec, audio) y decide si necesitará transcodificación.
 3. **Transcripción**: transcribe cada video con Whisper (motor intercambiable), con timestamps por palabra, detecta si el clip tiene narración real o es B-roll mudo, y arma un resumen legible del proyecto completo.
 3.5. **Muestreo de frames**: extrae JPGs de referencia de cada clip con `ffmpeg`, con una estrategia de muestreo distinta según el clip tenga narración o sea B-roll, y arma un manifest por job listo para que la etapa 4 elija qué frames usar.
-4. **Plan (filtro editorial y estructura autónoma)**: un agente Claude autónomo (sin aprobación humana en el camino) lee la transcripción completa y los frames de referencia, decide un veredicto por clip (`leccion`/`broll`/`descartar`/`otro_curso`), arma la estructura del curso (módulos → lecciones → segmentos) y escribe un registro de auditoría completo para revisión humana **posterior**. Ver [Etapa 4: agente de plan autónomo](#etapa-4-agente-de-plan-autónomo).
+4. **Plan (filtro editorial y estructura autónoma)**: un agente Claude autónomo (sin aprobación humana en el camino) lee la transcripción completa y los frames de referencia, decide un veredicto por clip (`leccion`/`broll`/`descartar`/`otro_curso`), arma la estructura del curso (módulos → lecciones → segmentos, cada lección con un `kind` `demo`/`normal`) y escribe un registro de auditoría completo para revisión humana **posterior**. Ver [Etapa 4: agente de plan autónomo](#etapa-4-agente-de-plan-autónomo).
+5. **Preparación de corte (etapas 5A/5B/5C, deterministas, sin agente)**: sobre los clips que el agente clasificó como `leccion`, detecta silencio (`ffmpeg silencedetect`), genera proxies de edición 1080p30 y calcula cortes deterministas a partir de los huecos entre segmentos de la transcripción de Whisper. Ver [Etapa 5: preparación de corte (5A/5B/5C)](#etapa-5-preparación-de-corte-5a5b5c).
 
 Las etapas siguientes del pipeline (edición, generación del curso, publicación, etc.) todavía no existen y no forman parte de este repo.
 
@@ -48,9 +49,10 @@ No hay input manual más allá de subir el ZIP: no se pide nombre de proyecto, n
    - **Transcripción** (`status: "transcribing"` → `"transcribed"`): progreso por archivo (pendiente/transcribiendo/hecho/error), leído de `progress/progress.json`.
    - **Muestreo de frames** (`status: "sampling"` → `"sampled"`): extrayendo los JPGs de referencia de cada clip con `ffmpeg`. Jobs viejos que quedaron en `"transcribed"` sin `frames/manifest.json` (de antes de que existiera esta etapa) muestran en su lugar un botón **"Muestrear frames"** que dispara la etapa manualmente.
    - **Estructurando (agente)** (`status: "planning"` → `"planned"`): 5º paso del stepper, corriendo el agente autónomo de la etapa 4. Jobs que quedaron en `"sampled"` sin `plan/structure.json` (de antes de que existiera esta etapa) muestran en su lugar un botón **"Generar estructura (agente)"** que dispara la etapa manualmente (`POST /api/jobs/<id>/plan`).
-   - Al llegar a `status: "planned"`: sección **AUDITORÍA** de solo lectura (sin controles de aprobación/bloqueo) con el árbol de estructura del curso, tarjetas de veredicto por clip (con confianza, razón, heurísticas citadas y frames), los apartados (`descartar`/`otro_curso`) y `plan/decisiones.md` renderizado; además botón **"Re-generar"** que vuelve a llamar a `POST /api/jobs/<id>/plan` sin re-transcribir ni re-muestrear. Ver [Etapa 4: agente de plan autónomo](#etapa-4-agente-de-plan-autónomo).
+   - Al llegar a `status: "planned"`: sección **AUDITORÍA** de solo lectura (sin controles de aprobación/bloqueo) con el árbol de estructura del curso, tarjetas de veredicto por clip (con confianza, razón, heurísticas citadas y frames), los apartados (`descartar`/`otro_curso`) y `plan/decisiones.md` renderizado; además botón **"Re-generar"** que vuelve a llamar a `POST /api/jobs/<id>/plan` sin re-transcribir ni re-muestrear. Ver [Etapa 4: agente de plan autónomo](#etapa-4-agente-de-plan-autónomo). En este estado (estable, previo a preparar) se muestra además el botón **"Preparar corte (silencio + proxies + cortes)"**.
+   - **Preparando corte** (`status: "preparing"` → `"prepared"`): 6º paso del stepper, corriendo las etapas 5A/5B/5C. Mientras corre, muestra el sub-progreso de proxies (X/N clips) leído de `progress/prep-progress.json`. Al llegar a `status: "prepared"` se agrega la sección **"Preparación del corte"**: una tabla por clip con silencios detectados, segundos silentes y shrink % (con demos marcadas 🖐, sin recorte), y por lección la cantidad de cortes y duración cruda vs. proyectada, con un `<details>` expandible listando cada corte (frames + mm:ss + chip "✓ silencio" si `confirmedBySilence`). El botón pasa a **"Re-preparar corte"**. Ver [Etapa 5: preparación de corte (5A/5B/5C)](#etapa-5-preparación-de-corte-5a5b5c).
    - Al llegar a `status: "sampled"` (previo a planear): resumen del proyecto (cantidad de videos, duración total, cuáles quedaron marcados como "sin narración"), botones **"Re-transcribir"** (`POST /api/jobs/<id>/transcribe`, vuelve a correr probe + transcripción + frames) y **"Re-muestrear frames"** (`POST /api/jobs/<id>/frames`, solo re-corre la etapa 3.5), botón para ver `master.txt` completo, y una sección **"Frames por clip"** con la galería de miniaturas generadas (ver [Estructura de `jobs/<id>/`](#estructura-de-jobsid)).
-   - Si el pipeline falla en cualquier etapa, `status: "error"` y se muestra `job.errorMessage`.
+   - Si el pipeline falla en cualquier etapa, `status: "error"` y se muestra `job.errorMessage`. Si ya existe `plan/structure.json` (los prerequisitos reales de la preparación), se ofrece además **"Reintentar preparación"** sin re-planear.
 
 ## Estructura de `jobs/<id>/`
 
@@ -63,6 +65,7 @@ jobs/
     job.json              # estado general del job y metadata de ingesta (etapa 1)
     probe/
       media.json           # metadata técnica por archivo, etapa 2
+      silence.json          # intervalos de silencio por clip 'leccion', etapa 5A
     transcripts/
       <base>.json           # transcripción completa de un archivo (segments + words con timestamps)
       <base>.tsv             # misma transcripción en TSV (start, end, text) para hojas de cálculo/subtítulos
@@ -71,20 +74,26 @@ jobs/
       summary.json               # resumen estructurado por archivo (narration, duración, status) — etapa 3
     progress/
       progress.json               # estado de transcripción por archivo en tiempo real (pending/running/done/error)
+      prep-progress.json           # estado de generación de proxies por clip en tiempo real, etapas 5A/5B/5C
     frames/
       manifest.json                # resultado del muestreo: clips + frames extraídos, etapa 3.5
       <clip sin extensión>/
         frame_SSSS.jpg               # JPGs extraídos, ancho 640px, nombrados por segundo (SSSS con padding a 4 dígitos)
     plan/
       verdicts.json                 # un veredicto por clip (leccion/broll/descartar/otro_curso), etapa 4
-      structure.json                  # módulos → lecciones → segments del curso principal + apartados, etapa 4
+      structure.json                  # módulos → lecciones → segments del curso principal + apartados (con `kind` por lección), etapa 4
       audit.json                        # registro de auditoría: modelo, usage, llamadas a frames extra, veredictos con lowConfidence, etapa 4
       decisiones.md                       # explicación en Markdown de las decisiones del agente, baja confianza primero, etapa 4
+      cuts/
+        <lessonId>.json                     # cortes deterministas por lección (huecos de Whisper), etapa 5C
+    assets/
+      proxies/
+        <clip sin extensión>.mp4  # proxy de edición 1080p30 h264/aac por clip 'leccion', etapa 5B
 ```
 
 - **`source/` es inmutable**: el ZIP subido se guarda temporalmente como `jobs/<id>/upload.zip`, se extrae a `source/` y luego se borra — nunca queda dentro de `source/`. Ningún código de las etapas posteriores (probe, transcripción, muestreo de frames) escribe, mueve ni borra nada dentro de `source/`; solo lo leen. Esta invariante está documentada en `src/lib/jobs.ts` y se repite explícitamente en `src/lib/frames-stage.ts`.
 
-- **`job.json`** — estado del job a través de las cinco etapas. El tipo `JobStatus` define: `"ingested"` (ZIP extraído y analizado, etapa 1 lista) → `"probing"` → `"probed"` (etapa 2 lista) → `"transcribing"` → `"transcribed"` (etapa 3 lista) → `"sampling"` → `"sampled"` (etapa 3.5 lista, `frames/` y `frames/manifest.json` generados) → `"planning"` → `"planned"` (etapa 4 lista, `plan/` completo) → `"error"` (falla irrecuperable en cualquier etapa, con `errorMessage`). También acumula `stages.probe`/`stages.transcribe`/`stages.frames`/`stages.plan` con `startedAt`/`finishedAt` de cada corrida. Ejemplo:
+- **`job.json`** — estado del job a través de las seis etapas. El tipo `JobStatus` define: `"ingested"` (ZIP extraído y analizado, etapa 1 lista) → `"probing"` → `"probed"` (etapa 2 lista) → `"transcribing"` → `"transcribed"` (etapa 3 lista) → `"sampling"` → `"sampled"` (etapa 3.5 lista, `frames/` y `frames/manifest.json` generados) → `"planning"` → `"planned"` (etapa 4 lista, `plan/` completo) → `"preparing"` → `"prepared"` (etapas 5A/5B/5C listas, `probe/silence.json`, `assets/proxies/` y `plan/cuts/` generados) → `"error"` (falla irrecuperable en cualquier etapa, con `errorMessage`). También acumula `stages.probe`/`stages.transcribe`/`stages.frames`/`stages.plan`/`stages.silence`/`stages.proxies`/`stages.cuts` con `startedAt`/`finishedAt` de cada corrida. Ejemplo:
 
   ```json
   {
@@ -201,7 +210,7 @@ jobs/
 
 - **`plan/`** — salida de la etapa 4 (`src/lib/plan/agent.ts`), un objeto único por corrida (borrado y re-escrito por completo al re-planear):
   - **`verdicts.json`** — un `Verdict` por clip del job: `{ clip, verdict, curso, razon, confianza, heuristicas }`, donde `verdict` es `"leccion" | "broll" | "descartar" | "otro_curso"`, `confianza` es un número entre 0 y 1, y `heuristicas` es la lista de IDs (kebab-case) de secciones de `config/domain-heuristics.md` que influyeron en ese veredicto.
-  - **`structure.json`** — `{ courseTitle, modules, apartados }`: `modules` es la estructura propuesta del curso principal (módulos → lecciones → segmentos, cada segmento con `clip`, `startSeconds`, `endSeconds` y `topic`); `apartados` son los veredictos con `verdict: "descartar"` u `"otro_curso"` (todo lo que quedó fuera del curso principal).
+  - **`structure.json`** — `{ courseTitle, modules, apartados }`: `modules` es la estructura propuesta del curso principal (módulos → lecciones → segmentos, cada segmento con `clip`, `startSeconds`, `endSeconds` y `topic`); cada lección trae además `kind: "demo" | "normal"` (el agente lo emite; si falta, por ejemplo un `structure.json` viejo, se asume `"normal"`) — ver [Etapa 5](#etapa-5-preparación-de-corte-5a5b5c) para qué significa; `apartados` son los veredictos con `verdict: "descartar"` u `"otro_curso"` (todo lo que quedó fuera del curso principal).
   - **`audit.json`** — registro de auditoría central de la corrida: `generatedAt`, `model`, `usage` (tokens de entrada/salida/cache), `framesCalls` (cada llamada a `extraer_frames`: clip, parámetros pedidos, frames agregados) y `clips` (un resumen por clip cruzando `verdict`, `confianza`, `lowConfidence` (`confianza < 0.6`), `heuristicas` citadas y `pidioFramesExtra`).
   - **`decisiones.md`** — documento en Markdown, en español, con las decisiones del agente para revisión humana; si hubo clips con `confianza < 0.6`, la primera sección se titula exactamente `⚠️ Baja confianza` y los lista antes que cualquier otra cosa.
 
@@ -271,6 +280,124 @@ curl -X POST http://localhost:3000/api/jobs/<jobId>/plan
 ### Filosofía: el humano audita, no aprueba en el camino
 
 No existe ningún paso de aprobación humana intermedia en la etapa 4: el agente recibe todo el contexto de una corrida (heurísticas, transcripción, frames), decide con su propio criterio (pidiendo más frames si lo necesita, dentro del presupuesto) y entrega un resultado final con `entregar_resultado` que se escribe directamente a disco. El rol del humano es **posterior**: revisar `plan/decisiones.md` y la vista de auditoría solo-lectura de `/jobs/[jobId]` (estructura, veredictos con confianza/razón/heurísticas citadas, frames usados, y los casos donde `pidioFramesExtra` cambió el veredicto), con los clips de baja confianza (`confianza < 0.6`) mostrados primero. Si el resultado no convence, la vía de corrección es editar `config/domain-heuristics.md` (o, en última instancia, volver a correr) — no hay un flujo de edición manual del plan en este repo.
+
+## Etapa 5: preparación de corte (5A/5B/5C)
+
+A diferencia de la etapa 4, la etapa 5 **no tiene ningún agente**: son tres pasos deterministas (`src/lib/silence-stage.ts`, `src/lib/proxy-stage.ts`, `src/lib/cuts-stage.ts`), orquestados en secuencia por `runPrepStages` (`src/lib/pipeline.ts`), que corren sobre los clips `leccion` de `plan/structure.json` (los únicos que se van a editar — `broll`/`descartar`/`otro_curso` no se tocan). Constantes centralizadas en `src/lib/constants.ts`.
+
+### 5A — Detección de silencio (`silence-stage.ts` → `probe/silence.json`)
+
+Por cada clip `leccion`, corre:
+
+```bash
+ffmpeg -v error -i <src> -af silencedetect=noise=-30dB:d=0.5 -f null -
+```
+
+(`SILENCE_NOISE_DB = -30`, `SILENCE_MIN_D = 0.5`) y parsea del `stderr` los pares `silence_start`/`silence_end` que imprime el filtro. Si el clip termina en silencio, `ffmpeg` no cierra el último tramo (no imprime su `silence_end`): se cierra a mano con la duración real del clip (`probe/media.json`).
+
+- **Lecciones `kind: "demo"`**: se miden los silencios igual (informativo, para poder inspeccionarlos en la UI) pero `skipped: true`, `projectedSeconds = rawSeconds` y `shrinkRatio = 1` — **por qué**: en una demo (instructor trabajando con las manos — laparoscopía, inseminación, descolado, inyecciones) el silencio **ES el contenido**, no aire muerto; recortarlo cortaría la propia técnica que se está mostrando.
+- **Lecciones `kind: "normal"`**: se suma la parte *recortable* de cada silencio — `duration - 2 × CUT_PADDING_SECONDS` (0 si el silencio es más corto que el padding de ambos lados) — para obtener `totalSilentSeconds`, y se proyecta `projectedSeconds = rawSeconds - totalSilentSeconds`. `shrinkRatio = projectedSeconds / rawSeconds` sale siempre de lo medido, nunca de un porcentaje fijo asumido.
+
+Idempotente: sobrescribe `probe/silence.json` completo en cada corrida. Nunca toca `source/`.
+
+### 5B — Proxies de edición (`proxy-stage.ts` → `assets/proxies/<clip>.mp4`)
+
+Por cada clip `leccion` que no tenga ya un proxy actualizado, corre:
+
+```bash
+ffmpeg -y -i <src> -vf scale=1920:1080 -r 30 \
+  -c:v libx264 -crf 18 -preset medium \
+  -c:a aac -b:a 192k <out>.tmp.mp4
+```
+
+(`PROXY_WIDTH = 1920`, `PROXY_HEIGHT = 1080`, `PROXY_FPS = 30`) y solo al terminar con éxito renombra `<out>.tmp.mp4` → `<out>.mp4` — así un proceso interrumpido a mitad de camino nunca deja un proxy a medio escribir que se confunda con uno completo. Clips sin pista de audio (por ejemplo `video_sin_audio.MOV` del job de prueba) no rompen el comando: con `-c:a aac` pero sin stream de audio de entrada, `ffmpeg` simplemente no produce audio de salida, sin fallar.
+
+**Re-correrlo es barato**: si `assets/proxies/<clip>.mp4` ya existe y es más nuevo (`mtime`) que `source/<clip>`, se salta el transcode entero. Corre en un **pool paralelo** (`PROXY_CONCURRENCY`, default `Math.max(1, Math.min(4, os.cpus().length - 2))` — el transcode con `libx264` es CPU-bound, así que se dejan al menos 2 núcleos libres para el resto del sistema, con tope de 4 para no saturar máquinas grandes). El progreso por clip (`pending`/`running`/`done`/`error`) se persiste en `progress/prep-progress.json` en cada transición; un error en un clip no aborta el resto.
+
+### 5C — Cortes deterministas (`cuts-stage.ts` → `plan/cuts/<lessonId>.json`)
+
+Esta es la pieza más "inspeccionable" del pipeline: **no hay heurísticas ocultas ni agentes de por medio**. Por cada segmento (clip + rango) de cada lección:
+
+- **`kind: "demo"`**: no se toca nada — `cuts: []`, `keep` es el segmento completo. Mismo motivo que en 5A: el silencio es el contenido.
+- **`kind: "normal"`**: se toma la transcripción de Whisper del clip (`transcripts/<base>.json`) y se calculan los **huecos** (tramos sin habla) dentro del rango del segmento — incluyendo el hueco inicial (`rangeStart` → primer segmento hablado) y el final (último segmento hablado → `rangeEnd`), si corresponden. Un hueco se convierte en corte si `gapSeconds > GAP_MIN_SECONDS` (0.6s); si no, se deja intacto (no vale la pena recortar aire tan breve).
+
+**Reglas de corte y sus porqués**:
+
+| Regla | Constante | Por qué |
+|---|---|---|
+| Aire de seguridad a cada lado del corte | `CUT_PADDING_SECONDS = 0.18` | Nunca comerse el borde de una palabra hablada: el corte real empieza `gap.start + 0.18` y termina `gap.end - 0.18`, dejando siempre colchón de silencio real antes y después. |
+| Redondeo a frames: `ceil` en el inicio, `floor` en el fin | — | El hueco/padding están en segundos, pero el corte final es en frames enteros. `ceil` en el inicio empuja el corte hacia ADELANTE (más tarde) y `floor` en el fin lo empuja hacia ATRÁS (más temprano) — en ambos casos el redondeo **agranda** el aire alrededor del corte, jamás lo achica. El precio es conservar algún frame de silencio de más, un costo aceptable frente al riesgo de cortar audio real. |
+| Clamp al rango del segmento de estructura | — | Un corte nunca puede salirse del segmento al que pertenece; clampear solo puede achicar el corte, nunca agrandarlo, así que la propiedad de "nunca come habla" se preserva. |
+| Cortes mínimos | `MIN_CUT_FRAMES = 3` | Tras padding + redondeo + clamp, un corte de menos de 3 frames no vale la pena — se descarta. |
+| Huecos mínimos considerados | `GAP_MIN_SECONDS = 0.6` | Huecos más cortos no valen la complejidad de recortarlos. |
+| **Nunca se corta a media palabra** | — | Los cortes SOLO existen dentro de huecos entre segmentos de Whisper (nunca dentro de un rango `[segment.start, segment.end]` de habla detectada), con padding de 0.18s de colchón a cada lado. Es geométricamente imposible que un corte se solape con un segmento hablado. |
+
+`confirmedBySilence` marca si el corte final se solapa con algún intervalo de `probe/silence.json` de ese mismo clip — una doble validación (hueco de Whisper + silencio medido con `ffmpeg`) puramente informativa para la UI, no cambia el resultado del corte.
+
+**Convención de frames**: un `FrameRange { startFrame, endFrame }` es un intervalo semiabierto `[startFrame, endFrame)`. Esto hace que `cuts` + `keep` particionen el rango del segmento sin huecos ni traslapes de forma trivial (el `endFrame` de un tramo es el `startFrame` del siguiente). `keep` es siempre el complemento exacto de `cuts` dentro del segmento. `fps = PROXY_FPS` (30) para todos los cálculos de frames.
+
+Idempotente: sobrescribe cada `plan/cuts/<lessonId>.json` en cada corrida. Un clip `normal` sin transcript disponible (caso borde, no debería pasar) se conserva completo sin recortes, con un `console.warn`.
+
+**Ejemplo de `plan/cuts/<lessonId>.json`** (recortado):
+
+```json
+{
+  "lessonId": "lesson-1",
+  "lessonTitle": "Lección de prueba (normal)",
+  "fps": 30,
+  "generatedAt": "2026-07-21T20:27:01.221Z",
+  "clips": [
+    {
+      "clip": "rumen-final.mp4",
+      "kind": "normal",
+      "segment": { "startSeconds": 0, "endSeconds": 30, "startFrame": 0, "endFrame": 900 },
+      "cuts": [
+        {
+          "startFrame": 183, "endFrame": 209,
+          "startSeconds": 6.1, "endSeconds": 6.97,
+          "gapSeconds": 1.24, "confirmedBySilence": false
+        }
+      ],
+      "keep": [
+        { "startFrame": 0, "endFrame": 183 },
+        { "startFrame": 209, "endFrame": 900 }
+      ],
+      "stats": { "cutFrames": 26, "keepFrames": 874, "rawSeconds": 30, "projectedSeconds": 29.13 }
+    }
+  ]
+}
+```
+
+**Ejemplo de `probe/silence.json`** (recortado):
+
+```json
+{
+  "generatedAt": "2026-07-21T20:27:01.219Z",
+  "clips": [
+    {
+      "filename": "rumen-final.mp4",
+      "kind": "normal",
+      "skipped": false,
+      "silences": [],
+      "count": 0,
+      "totalSilentSeconds": 0,
+      "rawSeconds": 30,
+      "projectedSeconds": 30,
+      "shrinkRatio": 1
+    }
+  ]
+}
+```
+
+### Re-correr la preparación sin re-planear (`POST /api/jobs/<id>/prep`)
+
+Igual que las etapas 3.5 y 4, la preparación se puede volver a correr sola sobre un job ya planeado, sin repetir probe/transcripción/muestreo/plan (por ejemplo tras corregir a mano un `kind` mal marcado en `structure.json`):
+
+```bash
+curl -X POST http://localhost:3000/api/jobs/<jobId>/prep
+```
+
+`src/app/api/jobs/[jobId]/prep/route.ts` valida que el job exista (404 si no), que su `status` sea uno desde el que tiene sentido preparar (`"planned"`, `"preparing"` o `"prepared"`; 400 si todavía no fue planeado) y que no haya ya un pipeline corriendo en memoria para ese job (409 si lo hay), y dispara `runPrepOnly` (`src/lib/pipeline.ts`) en background — nunca vuelve a llamar `runProbeStage`, `runTranscribeStage`, `runFramesStage` ni `runPlanStage`. También acepta jobs en `status: "error"` si ya tienen `plan/structure.json` (el prerequisito real de la preparación), para reintentar solo 5A/5B/5C tras un fallo puntual (por ejemplo de `ffmpeg`) sin re-planear todo el curso. Es re-corrible barato: 5A y 5C sobrescriben sus salidas por completo, y 5B (la etapa más cara en CPU) salta los proxies que ya estén al día. En la UI, el botón **"Preparar corte (silencio + proxies + cortes)"** (job sin `plan/cuts/` aún) o **"Re-preparar corte"** (job ya preparado) de `/jobs/[jobId]` llama a este mismo endpoint.
 
 ## Setup del motor de transcripción
 
@@ -350,11 +477,12 @@ GET /api/jobs/<jobId>/frames/<clip sin extensión>/frame_SSSS.jpg
 ## Estructura del código (`src/`)
 
 - `src/lib/types.ts` — tipos compartidos de todo el pipeline (`JobJson`, `JobStatus`, `MediaInfo`, `ProgressJson`, `FrameEntry`, `ManifestClip`, `FramesManifest`, etc.), usados por backend y UI.
-- `src/lib/jobs.ts` — persistencia en filesystem de todo el job: `job.json`, `probe/media.json`, `progress/progress.json`, `frames/manifest.json`, `plan/{verdicts,structure,audit}.json` y `plan/decisiones.md`, y las rutas de cada subdirectorio (`source/`, `probe/`, `transcripts/`, `progress/`, `frames/`, `plan/`). Documenta la invariante de `source/` inmutable.
+- `src/lib/jobs.ts` — persistencia en filesystem de todo el job: `job.json`, `probe/media.json`, `progress/progress.json`, `frames/manifest.json`, `plan/{verdicts,structure,audit}.json`, `plan/decisiones.md`, `probe/silence.json`, `plan/cuts/<lessonId>.json` y `progress/prep-progress.json`, y las rutas de cada subdirectorio (`source/`, `probe/`, `transcripts/`, `progress/`, `frames/`, `plan/`, `plan/cuts/`, `assets/`, `assets/proxies/`). Documenta la invariante de `source/` inmutable.
+- `src/lib/constants.ts` — constantes deterministas de las etapas 5A/5B/5C (`PROXY_FPS`, `PROXY_WIDTH`, `PROXY_HEIGHT`, `SILENCE_NOISE_DB`, `SILENCE_MIN_D`, `GAP_MIN_SECONDS`, `CUT_PADDING_SECONDS`, `MIN_CUT_FRAMES`), centralizadas para que queden inspeccionables desde un único lugar.
 - `src/lib/zip.ts` — extracción del ZIP subido hacia `jobs/<id>/source/`.
 - `src/lib/probe.ts` — análisis inicial de cada video con `ffprobe` durante la ingesta (etapa 1: duración, audio, resolución, detección de problemas para `job.json`).
 - `src/lib/probe-stage.ts` — etapa 2: vuelve a correr `ffprobe` sobre `source/` para obtener metadata técnica completa y escribe `probe/media.json`, incluyendo el criterio `needsTranscode`.
-- `src/lib/pipeline.ts` — orquestador de las etapas 2, 3, 3.5 y 4 (`runPipeline`), pensado para correr en background (fire-and-forget) tras la ingesta o al re-transcribir. Deduplica corridas concurrentes del mismo job en memoria (`isPipelineRunning`). También expone `runFramesOnly`, que corre únicamente la etapa 3.5 sobre un job ya transcrito (re-muestrear sin re-transcribir), validando que el `status` del job sea `"transcribed"`, `"sampling"` o `"sampled"`; y `runPlanOnly`, que corre únicamente la etapa 4 sobre un job ya muestreado (re-planear sin re-transcribir ni re-muestrear), validando que el `status` sea `"sampled"`, `"planning"` o `"planned"`.
+- `src/lib/pipeline.ts` — orquestador de las etapas 2, 3, 3.5, 4 y 5A/5B/5C (`runPipeline`), pensado para correr en background (fire-and-forget) tras la ingesta o al re-transcribir. Deduplica corridas concurrentes del mismo job en memoria (`isPipelineRunning`). También expone `runFramesOnly`, que corre únicamente la etapa 3.5 sobre un job ya transcrito (re-muestrear sin re-transcribir), validando que el `status` del job sea `"transcribed"`, `"sampling"` o `"sampled"`; `runPlanOnly`, que corre únicamente la etapa 4 sobre un job ya muestreado (re-planear sin re-transcribir ni re-muestrear), validando que el `status` sea `"sampled"`, `"planning"` o `"planned"`; y `runPrepOnly`, que corre únicamente las etapas 5A/5B/5C sobre un job ya planeado (re-preparar sin re-planear), validando que el `status` sea `"planned"`, `"preparing"` o `"prepared"` (o `"error"` con `plan/structure.json` ya generado).
 - `src/lib/transcribe/index.ts` — etapa 3: recorre los archivos en el orden de `probe/media.json`, transcribe cada uno con el motor configurado (con un mini-pool de concurrencia sin dependencias nuevas), detecta narración, escribe `transcripts/` y actualiza `progress/progress.json` por archivo.
 - `src/lib/transcribe/types.ts` — contrato TypeScript del motor de transcripción (`TranscribeEngine`, `TranscriptResult`, `TranscriptSegment`, `TranscriptWord`).
 - `src/lib/transcribe/engine.ts` — selector de motor según `TRANSCRIBE_ENGINE` (`mlx` o `faster`).
@@ -365,17 +493,21 @@ GET /api/jobs/<jobId>/frames/<clip sin extensión>/frame_SSSS.jpg
 - `src/lib/plan-stage.ts` — etapa 4: valida que `ANTHROPIC_API_KEY` esté configurada (error explícito si no) y delega en `runPlanAgent`.
 - `src/lib/plan/agent.ts` — corre el agente autónomo de la etapa 4 con el SDK de Anthropic (`toolRunner` beta, modelo `claude-opus-4-8`, thinking adaptive, effort high): arma el primer turno (heurísticas + `master.txt` + frames iniciales, con breakpoint de prompt cache), expone las tools `extraer_frames` y `entregar_resultado`, gestiona el presupuesto de frames extra bajo demanda, y al recibir `entregar_resultado` escribe `plan/{verdicts,structure,audit}.json` y `plan/decisiones.md`.
 - `src/lib/plan/schemas.ts` — JSON Schemas en formato strict de Anthropic (`additionalProperties: false`, `required` completo) de las tools `extraer_frames` y `entregar_resultado` del agente de plan.
-- `src/lib/plan/prompt.ts` — system prompt (español, estable entre corridas) del agente autónomo de la etapa 4: motor genérico de dominio, trato de las heurísticas como pistas no reglas, regla de confianza/frames extra y contrato de `entregar_resultado`.
+- `src/lib/plan/prompt.ts` — system prompt (español, estable entre corridas) del agente autónomo de la etapa 4: motor genérico de dominio, trato de las heurísticas como pistas no reglas, regla de confianza/frames extra, regla de `kind` demo/normal y contrato de `entregar_resultado`.
 - `config/domain-heuristics.md` — pistas específicas del dominio actual (cursos de AgroMax), editables sin tocar código; secciones `## id-kebab-case` citables por el agente en `verdicts.json`/`audit.json`.
+- `src/lib/silence-stage.ts` — etapa 5A: descubre los clips `leccion` de `plan/structure.json`, corre `ffmpeg silencedetect` sobre cada uno (secuencial) y escribe `probe/silence.json`, con `skipped`/`shrinkRatio` distintos según `kind` demo/normal (ver [Etapa 5](#etapa-5-preparación-de-corte-5a5b5c)).
+- `src/lib/proxy-stage.ts` — etapa 5B: transcodifica en paralelo (mini-pool, `PROXY_CONCURRENCY`) los clips `leccion` a proxies de edición 1080p30 h264/aac en `assets/proxies/`, saltando los que ya estén al día; persiste `progress/prep-progress.json` por clip.
+- `src/lib/cuts-stage.ts` — etapa 5C: calcula, por cada segmento de cada lección, los cortes deterministas a partir de los huecos entre segmentos de Whisper (con padding, redondeo conservador y clamp al segmento) y escribe `plan/cuts/<lessonId>.json`. La pieza más inspeccionable del pipeline — ver comentarios extensos en el archivo.
 - `scripts/setup-python.sh` — crea `.venv-whisper/` e instala `mlx-whisper`.
 - `scripts/transcribe_mlx.py` — script del motor `mlx-whisper` (macOS/Apple Silicon).
 - `scripts/transcribe_faster.py` — script del motor `faster-whisper` (producción Windows/NVIDIA).
 - `src/app/page.tsx` — pantalla única de subida: sube el ZIP (sin más input manual) y redirige a `/jobs/<id>`.
-- `src/app/jobs/[jobId]/page.tsx` — vista de job: pollea el estado, muestra progreso por etapa y por archivo, el resumen final con `master.txt`, los botones de re-transcribir/re-muestrear frames, y la galería de miniaturas por clip a partir de `frames/manifest.json`.
-- `src/app/api/ingest/route.ts` — recibe el ZIP, crea el job, corre la ingesta (etapa 1) y dispara `runPipeline` (etapas 2, 3 y 3.5) en background.
-- `src/app/api/jobs/[jobId]/route.ts` — expone `{ job, media, progress, summary }` de un job para que la UI pollee un único endpoint.
+- `src/app/jobs/[jobId]/page.tsx` — vista de job: pollea el estado, muestra progreso por etapa y por archivo, el resumen final con `master.txt`, los botones de re-transcribir/re-muestrear frames/re-generar estructura/re-preparar corte, la galería de miniaturas por clip a partir de `frames/manifest.json`, y la sección de resultados de preparación (silencio/shrink por clip, cortes por lección) a partir de `silence`/`cuts`.
+- `src/app/api/ingest/route.ts` — recibe el ZIP, crea el job, corre la ingesta (etapa 1) y dispara `runPipeline` (etapas 2 en adelante) en background.
+- `src/app/api/jobs/[jobId]/route.ts` — expone `{ job, media, progress, summary, manifest, structure, audit, verdicts, decisiones, silence, cuts, prepProgress }` de un job para que la UI pollee un único endpoint.
 - `src/app/api/jobs/[jobId]/transcribe/route.ts` — re-corre el pipeline completo (probe + transcripción + muestreo de frames) sobre un job existente, sin re-ingerir.
 - `src/app/api/jobs/[jobId]/frames/route.ts` — re-corre (o corre por primera vez) solo la etapa de muestreo de frames de un job ya transcrito, sin volver a probar ni re-transcribir.
 - `src/app/api/jobs/[jobId]/plan/route.ts` — re-corre (o corre por primera vez) solo la etapa de plan (agente autónomo) de un job ya muestreado, sin volver a probar, transcribir ni re-muestrear frames.
+- `src/app/api/jobs/[jobId]/prep/route.ts` — re-corre (o corre por primera vez) solo las etapas de preparación (5A/5B/5C) de un job ya planeado, sin volver a probar, transcribir, re-muestrear frames ni re-planear.
 - `src/app/api/jobs/[jobId]/frames/[...path]/route.ts` — sirve un JPG individual de `frames/<id>/` como `image/jpeg`, con protección anti path-traversal.
 - `src/app/api/jobs/[jobId]/master/route.ts` — sirve `transcripts/master.txt` como texto plano (404 si no existe todavía).

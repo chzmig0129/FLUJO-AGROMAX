@@ -629,3 +629,51 @@ textarea:focus {
   font-size: 0.8rem;
   color: var(--color-muted);
 }
+
+/* Sección de preparación del corte (5A/5B/5C, jobs/[jobId]) */
+.prep-section {
+  margin-top: 1.25rem;
+}
+
+.cuts-lessons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.cuts-lesson-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.cuts-lesson-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.cuts-details {
+  margin-top: 0.25rem;
+}
+
+.cuts-clip {
+  margin: 0.5rem 0 0.5rem 0.5rem;
+}
+
+.cuts-clip-title {
+  margin: 0.5rem 0 0.25rem;
+}
+
+.cuts-empty {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  margin: 0.25rem 0 0.25rem 0.5rem;
+}
+
+.cuts-list {
+  margin: 0.25rem 0 0.25rem 1.25rem;
+  font-size: 0.85rem;
+}
