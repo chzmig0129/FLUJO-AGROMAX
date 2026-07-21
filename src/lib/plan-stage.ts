@@ -4,16 +4,22 @@
  * la estructura del curso y escribe plan/{verdicts,structure,audit}.json +
  * plan/decisiones.md).
  *
- * STUB: la implementación real (SDK de Anthropic, tools, presupuesto de
- * frames, escritura de plan/) la agrega un issue posterior
- * (FLUJO-AGROMAX-9u6.3). Este archivo solo existe para que pipeline.ts
- * pueda importar y encadenar la etapa sin esperar a esa implementación.
+ * Esta etapa requiere ANTHROPIC_API_KEY configurada (el SDK de Anthropic la
+ * resuelve del entorno; Next.js carga .env.local automáticamente al
+ * process.env del server). Si falta, se lanza un error claro en vez de
+ * dejar que el SDK falle con un mensaje críptico de autenticación.
  */
+import { runPlanAgent } from "./plan/agent";
 
 /**
- * Corre la etapa de plan para un job. Por ahora siempre lanza un error: la
- * lógica real (agente autónomo con tool-runner) todavía no está implementada.
+ * Corre la etapa de plan para un job: valida que haya API key configurada y
+ * delega en el agente autónomo (runPlanAgent).
  */
 export async function runPlanStage(jobId: string): Promise<void> {
-  throw new Error("pendiente: lo implementa otro issue");
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error(
+      "Configura ANTHROPIC_API_KEY en .env.local para la etapa de plan (agente)"
+    );
+  }
+  await runPlanAgent(jobId);
 }
