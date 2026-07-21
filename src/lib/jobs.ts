@@ -15,12 +15,15 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type {
+  AuditJson,
   FramesManifest,
   JobJson,
   JobStatus,
   MediaInfo,
   ProgressJson,
   StageTiming,
+  StructureJson,
+  Verdict,
 } from "./types";
 
 /** Raíz absoluta donde viven todos los jobs (jobs/ en la raíz del proyecto). */
@@ -64,6 +67,31 @@ export function framesDir(id: string): string {
 /** Ruta absoluta a frames/manifest.json de un job. */
 export function manifestPath(id: string): string {
   return path.join(framesDir(id), "manifest.json");
+}
+
+/** Ruta absoluta al subdirectorio de salida de la etapa de plan (filtro editorial y estructura). */
+export function planDir(id: string): string {
+  return path.join(jobPath(id), "plan");
+}
+
+/** Ruta absoluta a plan/verdicts.json de un job. */
+export function verdictsJsonPath(id: string): string {
+  return path.join(planDir(id), "verdicts.json");
+}
+
+/** Ruta absoluta a plan/structure.json de un job. */
+export function structureJsonPath(id: string): string {
+  return path.join(planDir(id), "structure.json");
+}
+
+/** Ruta absoluta a plan/audit.json de un job. */
+export function auditJsonPath(id: string): string {
+  return path.join(planDir(id), "audit.json");
+}
+
+/** Ruta absoluta a plan/decisiones.md de un job. */
+export function decisionesMdPath(id: string): string {
+  return path.join(planDir(id), "decisiones.md");
 }
 
 /** Ruta absoluta a progress/progress.json de un job. */
@@ -209,6 +237,118 @@ export async function readFramesManifest(
 }
 
 /**
+ * Escribe (o sobrescribe) plan/verdicts.json de un job. Crea plan/ de forma
+ * recursiva si todavía no existe.
+ */
+export async function writeVerdictsJson(
+  id: string,
+  verdicts: Verdict[]
+): Promise<void> {
+  await fs.mkdir(planDir(id), { recursive: true });
+  await fs.writeFile(
+    verdictsJsonPath(id),
+    JSON.stringify(verdicts, null, 2),
+    "utf-8"
+  );
+}
+
+/**
+ * Lee plan/verdicts.json de un job. Devuelve null si todavía no existe (job
+ * que aún no llegó a la etapa de plan) en vez de lanzar un error.
+ */
+export async function readVerdictsJson(
+  id: string
+): Promise<Verdict[] | null> {
+  try {
+    const raw = await fs.readFile(verdictsJsonPath(id), "utf-8");
+    return JSON.parse(raw) as Verdict[];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Escribe (o sobrescribe) plan/structure.json de un job. Crea plan/ de forma
+ * recursiva si todavía no existe.
+ */
+export async function writeStructureJson(
+  id: string,
+  structure: StructureJson
+): Promise<void> {
+  await fs.mkdir(planDir(id), { recursive: true });
+  await fs.writeFile(
+    structureJsonPath(id),
+    JSON.stringify(structure, null, 2),
+    "utf-8"
+  );
+}
+
+/**
+ * Lee plan/structure.json de un job. Devuelve null si todavía no existe en
+ * vez de lanzar un error.
+ */
+export async function readStructureJson(
+  id: string
+): Promise<StructureJson | null> {
+  try {
+    const raw = await fs.readFile(structureJsonPath(id), "utf-8");
+    return JSON.parse(raw) as StructureJson;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Escribe (o sobrescribe) plan/audit.json de un job. Crea plan/ de forma
+ * recursiva si todavía no existe.
+ */
+export async function writeAuditJson(
+  id: string,
+  audit: AuditJson
+): Promise<void> {
+  await fs.mkdir(planDir(id), { recursive: true });
+  await fs.writeFile(auditJsonPath(id), JSON.stringify(audit, null, 2), "utf-8");
+}
+
+/**
+ * Lee plan/audit.json de un job. Devuelve null si todavía no existe en vez
+ * de lanzar un error.
+ */
+export async function readAuditJson(id: string): Promise<AuditJson | null> {
+  try {
+    const raw = await fs.readFile(auditJsonPath(id), "utf-8");
+    return JSON.parse(raw) as AuditJson;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Escribe (o sobrescribe) plan/decisiones.md de un job. Crea plan/ de forma
+ * recursiva si todavía no existe. A diferencia de los demás archivos de
+ * plan/, este es texto plano en Markdown, no JSON.
+ */
+export async function writeDecisionesMd(
+  id: string,
+  contents: string
+): Promise<void> {
+  await fs.mkdir(planDir(id), { recursive: true });
+  await fs.writeFile(decisionesMdPath(id), contents, "utf-8");
+}
+
+/**
+ * Lee plan/decisiones.md de un job. Devuelve null si todavía no existe en
+ * vez de lanzar un error.
+ */
+export async function readDecisionesMd(id: string): Promise<string | null> {
+  try {
+    return await fs.readFile(decisionesMdPath(id), "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Mergea el timing existente de una etapa con un patch parcial (por ejemplo
  * solo finishedAt), sin perder el startedAt ya guardado. Si no hay timing
  * previo ni el patch trae startedAt, no hay nada consistente que guardar.
@@ -246,6 +386,7 @@ export async function updateJobStatus(
       probe?: { startedAt?: string; finishedAt?: string };
       transcribe?: { startedAt?: string; finishedAt?: string };
       frames?: { startedAt?: string; finishedAt?: string };
+      plan?: { startedAt?: string; finishedAt?: string };
     };
     errorMessage?: string;
   }
@@ -263,6 +404,7 @@ export async function updateJobStatus(
           current.stages?.frames,
           extra.stages.frames
         ),
+        plan: mergeStageTiming(current.stages?.plan, extra.stages.plan),
       }
     : current.stages;
 

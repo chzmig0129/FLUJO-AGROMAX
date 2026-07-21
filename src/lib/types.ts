@@ -35,6 +35,8 @@ export interface VideoFileMeta {
  * - 'transcribed': transcripts/ fue generado con éxito.
  * - 'sampling': corriendo la extracción de frames de referencia con ffmpeg (etapa 3.5).
  * - 'sampled': frames/ y frames/manifest.json fueron generados con éxito.
+ * - 'planning': corriendo el agente autónomo de filtro editorial y estructura (etapa 4).
+ * - 'planned': plan/ fue generado con éxito (verdicts.json, structure.json, audit.json, decisiones.md).
  * - 'error': ocurrió un error irrecuperable en cualquier etapa del pipeline.
  */
 export type JobStatus =
@@ -45,6 +47,8 @@ export type JobStatus =
   | "transcribed"
   | "sampling"
   | "sampled"
+  | "planning"
+  | "planned"
   | "error";
 
 /**
@@ -75,6 +79,7 @@ export interface JobJson {
     probe?: StageTiming;
     transcribe?: StageTiming;
     frames?: StageTiming;
+    plan?: StageTiming;
   };
   errorMessage?: string;
 }
@@ -146,4 +151,88 @@ export interface ManifestClip {
 export interface FramesManifest {
   generatedAt: string;
   clips: ManifestClip[];
+}
+
+/**
+ * Veredicto del agente de filtro editorial (etapa 4) sobre un clip
+ * completo o un apartado del mismo.
+ * - 'leccion': material utilizable dentro de la estructura del curso.
+ * - 'broll': material de apoyo visual sin narración propia (se usa como
+ *   B-roll dentro de alguna lección).
+ * - 'descartar': tomas de prueba, retakes viejos, basura o inservible.
+ * - 'otro_curso': pertenece a un curso distinto al que se está armando
+ *   (ej. otra especie).
+ */
+export interface Verdict {
+  clip: string;
+  verdict: "leccion" | "broll" | "descartar" | "otro_curso";
+  curso: string | null;
+  razon: string;
+  confianza: number;
+  heuristicas: string[];
+}
+
+/**
+ * Estructura del curso propuesta por el agente: módulos con lecciones, cada
+ * lección compuesta de segmentos (rangos de tiempo dentro de un clip fuente).
+ * `apartados` recoge los veredictos que no entran en la estructura principal
+ * (descartados u de otro curso), para trazabilidad completa en la UI.
+ */
+export interface StructureJson {
+  courseTitle: string;
+  modules: Array<{
+    id: string;
+    title: string;
+    order: number;
+    topics: string[];
+    lessons: Array<{
+      id: string;
+      title: string;
+      order: number;
+      segments: Array<{
+        clip: string;
+        startSeconds: number;
+        endSeconds: number;
+        topic: string;
+      }>;
+    }>;
+  }>;
+  apartados: Verdict[];
+}
+
+/**
+ * Registro de auditoría de la corrida del agente de la etapa 4: uso de
+ * tokens, llamadas a extraer_frames (con los parámetros usados y cuántos
+ * frames nuevos agregaron) y, por clip, el veredicto final junto con si
+ * hubo baja confianza o un cambio de decisión tras pedir frames extra.
+ */
+export interface AuditJson {
+  generatedAt: string;
+  model: string;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+  };
+  framesCalls: Array<{
+    clip: string;
+    params: {
+      everySeconds?: number;
+      count?: number;
+      startSeconds?: number;
+      endSeconds?: number;
+    };
+    framesAdded: number;
+  }>;
+  clips: Array<{
+    clip: string;
+    verdict: Verdict["verdict"];
+    confianza: number;
+    lowConfidence: boolean;
+    heuristicas: string[];
+    pidioFramesExtra: boolean;
+    verdictAntes?: Verdict["verdict"];
+    verdictDespues?: Verdict["verdict"];
+    queCambio?: string;
+  }>;
 }

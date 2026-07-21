@@ -10,6 +10,7 @@
  */
 import { runFramesStage } from "./frames-stage";
 import { readJobJson, updateJobStatus } from "./jobs";
+import { runPlanStage } from "./plan-stage";
 import { runProbeStage } from "./probe-stage";
 import { runTranscribeStage } from "./transcribe/index";
 import type { JobStatus } from "./types";
@@ -78,6 +79,15 @@ async function executePipeline(jobId: string): Promise<void> {
     await updateJobStatus(jobId, "sampled", {
       stages: { frames: { finishedAt: new Date().toISOString() } },
     });
+
+    // Etapa 4: filtro editorial y estructura autónoma (agente Claude).
+    await updateJobStatus(jobId, "planning", {
+      stages: { plan: { startedAt: new Date().toISOString() } },
+    });
+    await runPlanStage(jobId);
+    await updateJobStatus(jobId, "planned", {
+      stages: { plan: { finishedAt: new Date().toISOString() } },
+    });
   } catch (err) {
     const errorMessage =
       err instanceof Error ? err.message : "Error desconocido en el pipeline";
@@ -138,6 +148,60 @@ async function executeFramesOnly(jobId: string): Promise<void> {
       err instanceof Error
         ? err.message
         : "Error desconocido en el muestreo de frames";
+    await updateJobStatus(jobId, "error", { errorMessage });
+  }
+}
+
+/**
+ * Estados a partir de los cuales tiene sentido (re)correr solo la etapa de
+ * plan: el job ya tiene frames/manifest.json generado (o incluso ya pasó
+ * por la etapa de plan antes, lo cual es válido para re-planear).
+ */
+const PLAN_READY_STATUSES: JobStatus[] = ["sampled", "planning", "planned"];
+
+/**
+ * Corre solo la etapa de plan (filtro editorial y estructura autónoma) para
+ * un job ya muestreado (permite re-planear sin volver a correr probe/
+ * transcribe/frames). Reutiliza el mismo registro `running` que runPipeline
+ * para evitar corridas concurrentes del mismo job, sea cual sea la etapa que
+ * las disparó.
+ */
+export function runPlanOnly(jobId: string): Promise<void> {
+  const existing = running.get(jobId);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = executePlanOnly(jobId).finally(() => {
+    running.delete(jobId);
+  });
+
+  running.set(jobId, promise);
+  return promise;
+}
+
+/** Ejecuta únicamente la etapa de plan, validando el status previo del job. */
+async function executePlanOnly(jobId: string): Promise<void> {
+  try {
+    const current = await readJobJson(jobId);
+    if (!PLAN_READY_STATUSES.includes(current.status)) {
+      throw new Error(
+        `No se puede planear: el job "${jobId}" debe estar muestreado primero (status actual: "${current.status}")`
+      );
+    }
+
+    await updateJobStatus(jobId, "planning", {
+      stages: { plan: { startedAt: new Date().toISOString() } },
+    });
+    await runPlanStage(jobId);
+    await updateJobStatus(jobId, "planned", {
+      stages: { plan: { finishedAt: new Date().toISOString() } },
+    });
+  } catch (err) {
+    const errorMessage =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido en la etapa de plan";
     await updateJobStatus(jobId, "error", { errorMessage });
   }
 }

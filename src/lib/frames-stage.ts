@@ -23,6 +23,7 @@ import { promisify } from "node:util";
 import ffmpegPath from "ffmpeg-static";
 import {
   framesDir,
+  readFramesManifest,
   readMediaJson,
   sourcePath,
   transcriptsDir,
@@ -272,4 +273,143 @@ export async function runFramesStage(jobId: string): Promise<FramesManifest> {
 
   await writeFramesManifest(jobId, manifest);
   return manifest;
+}
+
+/**
+ * Parámetros para pedir frames adicionales de un clip. Se aceptan dos
+ * estrategias, evaluadas en este orden de prioridad:
+ * - `everySeconds`: un frame cada N segundos dentro del rango pedido.
+ * - `count`: N frames distribuidos uniformemente dentro del rango pedido
+ *   (si N === 1, se toma el punto medio del rango).
+ * Si no se pasa ninguna, se usa el patrón por defecto de 4 puntos (15/40/
+ * 65/90%) dentro del rango, igual que un clip narrado.
+ * `startSeconds`/`endSeconds` acotan el rango (por defecto todo el clip).
+ */
+export interface ExtractFramesForClipParams {
+  everySeconds?: number;
+  count?: number;
+  startSeconds?: number;
+  endSeconds?: number;
+}
+
+/**
+ * Extrae frames adicionales para UN clip bajo demanda (usado por el agente
+ * de la etapa 4 cuando su confianza es baja y los frames iniciales no le
+ * alcanzan). Reutiliza la misma lógica de extracción/nombrado que
+ * runFramesStage, pero:
+ * - opera sobre un único clip, no borra ni recrea frames/ del job.
+ * - salta cualquier timestamp que ya exista en el manifest para ese clip
+ *   (mismo timestamp -> mismo nombre de archivo, así que no hay colisión).
+ * - mergea los frames nuevos al manifest.json existente (lee -> mergea ->
+ *   escribe), ordenados por timeSeconds; NUNCA pisa/borra los frames que ya
+ *   estaban.
+ *
+ * Requiere que el clip ya exista en frames/manifest.json (es decir, que
+ * runFramesStage ya haya corrido al menos una vez para el job) para poder
+ * conocer su durationSeconds sin volver a leer probe/media.json.
+ */
+export async function extractFramesForClip(
+  jobId: string,
+  clip: string,
+  params: ExtractFramesForClipParams = {}
+): Promise<FrameEntry[]> {
+  const manifest = await readFramesManifest(jobId);
+  if (!manifest) {
+    throw new Error(
+      "No hay frames/manifest.json: corre el muestreo de frames antes de pedir frames extra de un clip"
+    );
+  }
+  const clipEntry = manifest.clips.find((c) => c.filename === clip);
+  if (!clipEntry) {
+    throw new Error(
+      `El clip "${clip}" no está en frames/manifest.json de este job`
+    );
+  }
+
+  const durationSeconds = clipEntry.durationSeconds;
+  const start = Math.max(0, params.startSeconds ?? 0);
+  const end = Math.min(durationSeconds, params.endSeconds ?? durationSeconds);
+
+  let rawTimestamps: number[];
+  if (params.everySeconds && params.everySeconds > 0) {
+    rawTimestamps = [];
+    for (let t = start; t <= end; t += params.everySeconds) {
+      rawTimestamps.push(t);
+    }
+  } else if (params.count && params.count > 0) {
+    const n = params.count;
+    rawTimestamps =
+      n === 1
+        ? [(start + end) / 2]
+        : Array.from(
+            { length: n },
+            (_, i) => start + (i * (end - start)) / (n - 1)
+          );
+  } else {
+    rawTimestamps = [0.15, 0.4, 0.65, 0.9].map(
+      (fraction) => start + fraction * (end - start)
+    );
+  }
+
+  const timestamps = roundAndDedup(rawTimestamps, durationSeconds);
+
+  // Saltar timestamps que ya existen en el manifest para este clip: mismo
+  // timeSeconds -> mismo nombre de archivo, así que pedirlos de nuevo sería
+  // trabajo (y escritura de disco) redundante.
+  const existingSeconds = new Set(clipEntry.frames.map((f) => f.timeSeconds));
+  const newTimestamps = timestamps.filter((t) => !existingSeconds.has(t));
+
+  const clipDirName = stripExtension(clip);
+  const clipOutDir = path.join(framesDir(jobId), clipDirName);
+  await fs.mkdir(clipOutDir, { recursive: true });
+  const srcFile = path.join(sourcePath(jobId), clip);
+
+  const concurrency = resolveConcurrency();
+  const newFrames: FrameEntry[] = [];
+
+  await runPool(newTimestamps, concurrency, async (timeSeconds) => {
+    const frameName = `frame_${String(timeSeconds).padStart(4, "0")}.jpg`;
+    const outFile = path.join(clipOutDir, frameName);
+    try {
+      await extractFrame(srcFile, timeSeconds, outFile);
+      newFrames.push({
+        timeSeconds,
+        file: `${clipDirName}/${frameName}`,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `frames-stage: no se pudo extraer frame extra en ${clip}@${timeSeconds}s: ${message}`
+      );
+    }
+  });
+
+  newFrames.sort((a, b) => a.timeSeconds - b.timeSeconds);
+
+  if (newFrames.length === 0) {
+    return newFrames;
+  }
+
+  // Re-leer el manifest justo antes de escribir (por si algo más lo tocó
+  // mientras ffmpeg corría) y mergear sin pisar los clips/frames existentes.
+  const freshManifest = (await readFramesManifest(jobId)) ?? manifest;
+  const mergedClips: ManifestClip[] = freshManifest.clips.map((c) => {
+    if (c.filename !== clip) return c;
+    const seen = new Set<number>();
+    const merged = [...c.frames, ...newFrames]
+      .sort((a, b) => a.timeSeconds - b.timeSeconds)
+      .filter((f) => {
+        if (seen.has(f.timeSeconds)) return false;
+        seen.add(f.timeSeconds);
+        return true;
+      });
+    return { ...c, frames: merged };
+  });
+
+  await writeFramesManifest(jobId, {
+    generatedAt: freshManifest.generatedAt,
+    clips: mergedClips,
+  });
+
+  return newFrames;
 }
