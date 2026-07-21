@@ -203,7 +203,15 @@ export async function runFramesStage(jobId: string): Promise<FramesManifest> {
     const mediaEntry = media?.find((m) => m.filename === filename);
     const durationSeconds = mediaEntry?.durationSeconds ?? fileSummary.durationSeconds;
 
-    const timestamps = roundAndDedup(computeTimestamps(narration, durationSeconds));
+    // Si el cálculo normal (narrado o B-roll) deja la lista vacía —típico de
+    // un clip B-roll cortísimo cuya ventana [2, dur-0.5] no cabe, o de un
+    // narrado ultracorto— caemos al punto medio del clip. Un clip sin ningún
+    // frame deja ciego al agente que consume el manifest, que es justo lo
+    // que esta etapa existe para evitar: mejor 1 frame de compromiso que 0.
+    let timestamps = roundAndDedup(computeTimestamps(narration, durationSeconds));
+    if (timestamps.length === 0) {
+      timestamps = [Math.max(0, Math.round(durationSeconds / 2))];
+    }
     const clipDirName = stripExtension(filename);
     const clipOutDir = path.join(outDir, clipDirName);
     await fs.mkdir(clipOutDir, { recursive: true });
