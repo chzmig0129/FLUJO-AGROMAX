@@ -41,12 +41,12 @@ Cada job de ingesta vive en su propia carpeta dentro de `jobs/`, identificada po
 ```
 jobs/
   <id>/
-    source/       # ZIP original y videos extraídos, tal como se subieron
+    source/       # videos extraídos del ZIP subido (el ZIP original NO se guarda aquí)
     job.json       # estado del job y metadata de cada video
-    order.json      # orden final y títulos definidos por el usuario (se crea al confirmar)
+    order.json      # orden y títulos de cada video (se crea en la ingesta, se sobrescribe al confirmar)
 ```
 
-- **`source/` es inmutable**: una vez extraído el ZIP subido, los archivos dentro de `source/` nunca se modifican ni se reordenan. El orden y los títulos elegidos por el usuario viven aparte, en `order.json`, como referencias a los archivos de `source/`.
+- **`source/` es inmutable**: el ZIP subido se guarda temporalmente como `jobs/<id>/upload.zip`, se extrae a `source/` y luego se borra — nunca queda dentro de `source/`. Una vez extraído, los archivos dentro de `source/` nunca se modifican ni se reordenan. El orden y los títulos elegidos por el usuario viven aparte, en `order.json`, como referencias a los archivos de `source/`.
 
 - **`job.json`** — estado del job y metadata de cada video analizado con `ffprobe`. Ejemplo:
 
@@ -80,9 +80,9 @@ jobs/
   }
   ```
 
-  `status` puede ser `"processing"` (ffprobe en curso), `"ingested"` (el usuario ya confirmó orden/títulos) o `"error"` (falló la ingesta). `issues` puede contener `"not_a_video"`, `"zero_duration"` y/o `"no_audio"`.
+  El tipo `JobStatus` define `"processing"`, `"ingested"` y `"error"`, pero hoy el único valor que el código realmente escribe es `"ingested"`: `job.json` solo se crea después de que `ffprobe` ya terminó de analizar los videos, y si algo falla durante la ingesta se borra el directorio completo del job (`jobs/<id>/`) en vez de marcarlo con `status: "error"`. `"processing"` y `"error"` quedan reservados para una implementación futura. `issues` puede contener `"not_a_video"`, `"zero_duration"` y/o `"no_audio"`.
 
-- **`order.json`** — orden final y título elegido para cada video, generado al confirmar en la pantalla de "ordenar y titular". Ejemplo:
+- **`order.json`** — orden y título de cada video. Se crea durante la ingesta inicial (`POST /api/ingest`) con orden alfabético por nombre de archivo y título por defecto (el nombre de archivo sin extensión), y se sobrescribe con el orden y los títulos definitivos al confirmar en la pantalla de "ordenar y titular". Ejemplo:
 
   ```json
   {
