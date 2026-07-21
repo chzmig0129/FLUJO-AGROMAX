@@ -19,6 +19,7 @@ import { NextResponse } from "next/server";
 import { createJobDir, jobPath, sourcePath, writeJobJson } from "@/lib/jobs";
 import { extractVideosFromZip } from "@/lib/zip";
 import { probeAll } from "@/lib/probe";
+import { runPipeline } from "@/lib/pipeline";
 import type { JobJson } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -78,6 +79,11 @@ export async function POST(request: Request): Promise<NextResponse> {
       files,
     };
     await writeJobJson(job);
+
+    // Arrancamos el pipeline (probe + transcripción) en background: no se
+    // hace await para no bloquear la respuesta del ingest. Cualquier error
+    // se loguea (el pipeline mismo ya persiste el estado 'error' en el job).
+    runPipeline(id).catch(console.error);
 
     return NextResponse.json({ jobId: id, files });
   } catch (err) {
