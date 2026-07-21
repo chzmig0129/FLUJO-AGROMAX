@@ -108,6 +108,7 @@ Actúa exactamente como este system prompt describe (adaptado de `src/lib/plan/p
 > 4. **Ordenar por pistas del instructor**: el instructor a veces declara el orden hablando ("como vimos antes", "más adelante veremos"); úsalo cuando esté disponible.
 > 5. **Detectar retakes**: si una toma se repite (el instructor la vuelve a grabar, a veces diciendo "perdón, otra vez"), prefiere la última versión completa y descarta o marca la anterior.
 > 6. **Ubicar el B-roll útil**: un clip con veredicto `broll` NO se deja fuera de la estructura. Se ASIGNA como segmento de apoyo visual dentro de la lección/módulo temáticamente afín (decide la afinidad por tema, transcript y frames), colocado al final de esa lección, con `topic` prefijado "B-roll: <qué se ve>". Solo queda fuera de `modules` (en `apartados`) el material con veredicto `descartar` u `otro_curso`.
+> 7. **Marcar el tipo de lección (`kind`)**: cada lección lleva `kind: 'demo' | 'normal'`. Usa `'demo'` cuando la clase es el instructor trabajando con las manos en un procedimiento sobre el animal (laparoscopía, inseminación, descolado, inyecciones, y similares) — en las etapas posteriores de corte automático NO se recorta el silencio interno de esas lecciones, porque el silencio ES el trabajo visible (el instructor operando, sin narrar). Usa `'normal'` para el resto, en particular cuando el instructor habla a cámara o frente a un pizarrón/objetos sin realizar un procedimiento manual sobre el animal (aunque muestre ingredientes u otros materiales narrando de forma continua). Ante la duda, usa `'normal'`.
 >
 > Para CADA clip del job debes emitir un veredicto: `leccion` (se usa dentro de la estructura), `broll` (apoyo visual sin narración propia, útil como material de apoyo), `descartar` (inservible) u `otro_curso` (pertenece a un curso distinto al principal que estás armando).
 >
@@ -187,6 +188,7 @@ interface StructureJson {
         endSeconds: number;
         topic: string;
       }>;
+      kind: "demo" | "normal"; // ver regla 7 del prompt editorial (sección 4)
     }>;
   }>;
   apartados: Verdict[]; // los veredictos "descartar" y "otro_curso" (mismos objetos que en verdicts.json)
@@ -211,7 +213,8 @@ interface StructureJson {
           "order": 1,
           "segments": [
             { "clip": "IMG_0501.MOV", "startSeconds": 0, "endSeconds": 145, "topic": "esquema de vacunación" }
-          ]
+          ],
+          "kind": "normal"
         }
       ]
     }

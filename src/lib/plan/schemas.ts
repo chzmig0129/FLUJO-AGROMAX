@@ -128,8 +128,14 @@ const lessonSchema = {
       items: segmentSchema,
       description: "Segmentos (rangos de tiempo en clips fuente) que componen la lección.",
     },
+    kind: {
+      type: "string",
+      enum: ["demo", "normal"],
+      description:
+        "'demo': la lección es el instructor trabajando con las manos en un procedimiento (laparoscopía, inseminación, descolado, inyecciones) — las etapas de corte NO recortarán silencio interno porque el silencio es el trabajo visible. 'normal': el resto (instructor hablando a cámara/pizarrón). Usa 'normal' por defecto si dudas.",
+    },
   },
-  required: ["id", "title", "order", "segments"],
+  required: ["id", "title", "order", "segments", "kind"],
   additionalProperties: false,
 } as const;
 
