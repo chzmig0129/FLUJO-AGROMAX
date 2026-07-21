@@ -12,3 +12,6 @@ npm-debug.log*
 # Job data (etapa 1 ingesta)
 /jobs/
 tsconfig.tsbuildinfo
+
+# Entorno virtual Python para el motor de transcripción (etapa 3)
+.venv-whisper/
