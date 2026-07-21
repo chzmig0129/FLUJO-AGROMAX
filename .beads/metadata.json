@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "FLUJO_AGROMAX",
+  "project_id": "7032a5d3-4f5e-413a-866d-1e9a05f2b720"
+}
