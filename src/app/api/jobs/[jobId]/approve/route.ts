@@ -14,7 +14,7 @@ import type { Approval, JobStatus } from "@/lib/types";
 export const runtime = "nodejs";
 
 /** Estados desde los que tiene sentido aprobar la estructura. */
-const APPROVABLE_STATUSES: JobStatus[] = ["planned", "prepared"];
+const APPROVABLE_STATUSES: JobStatus[] = ["planned", "prepared", "preparing"];
 
 export async function POST(
   _request: Request,

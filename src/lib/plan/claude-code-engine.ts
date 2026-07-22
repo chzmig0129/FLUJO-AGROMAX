@@ -66,6 +66,41 @@ function resolveAllowedTools(): string[] {
 }
 
 /**
+ * Mata el árbol de procesos del hijo al expirar el timeout.
+ *
+ * En Windows con `useShell: true` (caso `claude.cmd`), `spawn` lanza
+ * `cmd.exe` como proceso directo, y `cmd.exe` a su vez lanza `claude.cmd`
+ * -> `node claude` como nietos. Llamar `child.kill('SIGKILL')` en ese caso
+ * solo mata a `cmd.exe`: en Windows eso NO derriba a los procesos
+ * hijos/nietos (limitación conocida de Node — `spawn` con `shell:true` no
+ * crea un grupo de procesos que `kill` pueda derribar completo), así que el
+ * proceso real de `claude`/`node` (y cualquier `Bash(node:*)`/`Bash(ffmpeg:*)`
+ * que haya lanzado) queda huérfano corriendo en background. Por eso en
+ * Windows usamos `taskkill /PID <pid> /T /F`, que sí mata recursivamente
+ * todo el árbol de descendientes del PID indicado.
+ *
+ * En macOS/Linux, `shell:false` hace que el hijo directo de `spawn` sea el
+ * propio proceso `claude`, así que `SIGKILL` sobre ese PID basta.
+ */
+function killProcessTree(pid: number | undefined, useShell: boolean): void {
+  if (!pid) return;
+  if (process.platform === "win32" && useShell) {
+    // /T mata el árbol completo (hijos y nietos), /F fuerza la terminación.
+    spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+      shell: false,
+    });
+    return;
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // El proceso ya pudo haber terminado por su cuenta; no hay nada más
+    // que hacer aquí.
+  }
+}
+
+/**
  * Corre la etapa de plan invocando `claude -p "/plan-etapa4 <jobId>"` de
  * forma headless. cwd = raíz del repo (process.cwd()), donde vive
  * .claude/commands/plan-etapa4.md, para que el CLI resuelva el comando.
@@ -102,7 +137,7 @@ export async function runPlanViaClaudeCode(jobId: string): Promise<void> {
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill("SIGKILL");
+      killProcessTree(child.pid, useShell);
       reject(
         new Error(
           `Etapa de plan (claude-code) excedió el timeout de ${timeoutMs / 60000} min para el job '${jobId}'`,
