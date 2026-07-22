@@ -13,6 +13,10 @@ const nextConfig = {
     '@remotion/bundler',
     '@remotion/renderer',
   ],
+  // Permite requests de dev-server desde el host tailscale que expone
+  // localhost:3000 vía `tailscale serve`. Sin esto, Next 16 bloquea los
+  // requests cross-origin del cliente y la UI queda en "Cargando proyecto...".
+  allowedDevOrigins: ['itg.tailf75570.ts.net', '100.72.217.107'],
 };
 
 export default nextConfig;
