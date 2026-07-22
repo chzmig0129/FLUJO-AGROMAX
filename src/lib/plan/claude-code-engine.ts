@@ -70,6 +70,36 @@ function resolveAllowedTools(): string[] {
   return parsed.length > 0 ? parsed : DEFAULT_ALLOWED_TOOLS;
 }
 
+/** Roles de agente soportados por `resolveModelForRole`. */
+export type ClaudeCodeAgentRole = "director" | "editor" | "juez";
+
+/**
+ * Resuelve el modelo de Claude Code a usar para un rol dado, vía variables
+ * de entorno con default razonable por rol:
+ *
+ * - `director`: CLAUDE_MODEL_DIRECTOR (default `claude-opus-4-8`) — el rol
+ *   más caro/lento, jefe del loop de corrección, se beneficia del modelo
+ *   más capaz disponible en la suscripción.
+ * - `editor`: CLAUDE_MODEL_EDITOR (default `claude-opus-4-8`).
+ * - `juez`: CLAUDE_MODEL_JUEZ (default `claude-sonnet-5`) — veredictos de
+ *   gates corren en paralelo por clase; un modelo más liviano mantiene el
+ *   costo/latencia del pool razonable.
+ */
+export function resolveModelForRole(role: ClaudeCodeAgentRole): string {
+  switch (role) {
+    case "director":
+      return process.env.CLAUDE_MODEL_DIRECTOR ?? "claude-opus-4-8";
+    case "editor":
+      return process.env.CLAUDE_MODEL_EDITOR ?? "claude-opus-4-8";
+    case "juez":
+      return process.env.CLAUDE_MODEL_JUEZ ?? "claude-sonnet-5";
+    default: {
+      const exhaustiveCheck: never = role;
+      throw new Error(`Rol de agente desconocido: ${String(exhaustiveCheck)}`);
+    }
+  }
+}
+
 /**
  * Mata el árbol de procesos del hijo al expirar el timeout.
  *
@@ -115,6 +145,12 @@ export interface RunCommandViaClaudeCodeOptions {
   timeoutMin?: number;
   /** Herramientas permitidas para el CLI headless. Por defecto `resolveAllowedTools()`. */
   allowedTools?: string[];
+  /**
+   * Modelo a pasar como `--model <valor>` al CLI. Opcional: si no se pasa,
+   * el CLI usa su propio default y el comportamiento de las etapas
+   * existentes no cambia. Ver `resolveModelForRole` para resolución por rol.
+   */
+  model?: string;
 }
 
 /**
@@ -132,7 +168,7 @@ export interface RunCommandViaClaudeCodeOptions {
 export async function runCommandViaClaudeCode(
   opts: RunCommandViaClaudeCodeOptions,
 ): Promise<void> {
-  const { command, args, timeoutMin, allowedTools } = opts;
+  const { command, args, timeoutMin, allowedTools, model } = opts;
   const claudeBin = resolveClaudeBin();
   // Windows: los shims .cmd/.bat que instala npm no son ejecutables PE
   // directos, así que spawn necesita shell:true para resolverlos vía cmd.exe.
@@ -149,6 +185,7 @@ export async function runCommandViaClaudeCode(
         ...(allowedTools ?? resolveAllowedTools()),
         "--output-format",
         "json",
+        ...(model ? ["--model", model] : []),
       ],
       {
         cwd: process.cwd(),
@@ -283,4 +320,64 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Un comando a correr vía `runCommandViaClaudeCode` dentro de `runCommandsInPool`. */
+export interface PoolCommand {
+  command: string;
+  args?: string;
+  timeoutMin?: number;
+  model?: string;
+  allowedTools?: string[];
+}
+
+/** Resultado individual de un comando corrido dentro de `runCommandsInPool`. */
+export type PoolCommandResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+/**
+ * Mini-pool de concurrencia (mismo patrón que frames-stage.ts /
+ * transcribe/index.ts): corre hasta `concurrency` invocaciones de
+ * `runCommandViaClaudeCode` en simultáneo, una por cada elemento de `cmds`,
+ * y recolecta un resultado `{ok}` o `{error}` por comando en el mismo orden
+ * en que fueron pasados. Un comando que falla NO aborta el resto: el error
+ * se captura y se reporta en el resultado correspondiente.
+ */
+export async function runCommandsInPool(
+  cmds: PoolCommand[],
+  concurrency: number,
+): Promise<PoolCommandResult[]> {
+  const results: PoolCommandResult[] = new Array(cmds.length);
+  let nextIndex = 0;
+
+  async function runNext(): Promise<void> {
+    const currentIndex = nextIndex;
+    nextIndex += 1;
+    if (currentIndex >= cmds.length) return;
+
+    const cmd = cmds[currentIndex];
+    try {
+      await runCommandViaClaudeCode({
+        command: cmd.command,
+        args: cmd.args,
+        timeoutMin: cmd.timeoutMin,
+        model: cmd.model,
+        allowedTools: cmd.allowedTools,
+      });
+      results[currentIndex] = { ok: true };
+    } catch (err) {
+      results[currentIndex] = {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+
+    await runNext();
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, cmds.length) }, () => runNext());
+  await Promise.all(workers);
+
+  return results;
 }
