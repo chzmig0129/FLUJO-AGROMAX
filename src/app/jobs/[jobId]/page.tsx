@@ -403,6 +403,15 @@ export default function JobPage() {
   const [packaging, setPackaging] = useState(false);
   const [packageError, setPackageError] = useState<string | null>(null);
 
+  // Modo "corre todo solo" (run-all): dispara el pipeline completo
+  // desatendido (prep -> ... -> package) vía POST /api/jobs/<id>/run-all.
+  // El endpoint responde de inmediato (fire-and-forget en el backend); el
+  // avance real se sigue con el polling general del job (mismo status/
+  // errorMessage que el resto del pipeline), así que acá solo se maneja el
+  // estado del propio click (loading + error del POST en sí).
+  const [runningAll, setRunningAll] = useState(false);
+  const [runAllError, setRunAllError] = useState<string | null>(null);
+
   // Generación de briefs de overlays: POST síncrono, sin polling dedicado.
   const [generatingBriefs, setGeneratingBriefs] = useState(false);
   const [overlayBriefsError, setOverlayBriefsError] = useState<
@@ -1187,6 +1196,40 @@ export default function JobPage() {
   }, [jobId, loadJob]);
 
   /**
+   * Dispara el modo "corre todo solo" (run-all) vía
+   * POST /api/jobs/<id>/run-all {}. Fire-and-forget en el backend: el
+   * endpoint responde de inmediato con ok:true (o 400/409 si todavía no se
+   * puede correr) y la corrida completa avanza en background actualizando
+   * job.status/errorMessage igual que el resto del pipeline, así que un
+   * simple loadJob() tras el POST alcanza para reflejar el arranque; el
+   * polling general de la página (ver el efecto que llama a loadJob) sigue
+   * el resto del avance sin necesidad de un polling dedicado acá.
+   */
+  const handleRunAll = useCallback(async () => {
+    setRunAllError(null);
+    setRunningAll(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/run-all`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setRunAllError(
+          body?.error ?? "No se pudo iniciar la corrida completa."
+        );
+        return;
+      }
+      await loadJob();
+    } catch {
+      setRunAllError("No se pudo iniciar la corrida completa.");
+    } finally {
+      setRunningAll(false);
+    }
+  }, [jobId, loadJob]);
+
+  /**
    * Genera los briefs de overlays de todas las lecciones vía
    * POST /api/jobs/<id>/overlay-briefs {}. Igual que el empaquetado,
    * responde de forma síncrona, así que un simple loadJob() alcanza.
@@ -1806,9 +1849,24 @@ export default function JobPage() {
                     Editar
                   </button>
                 )}
+                {approval !== null && (
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    onClick={handleRunAll}
+                    disabled={runningAll}
+                  >
+                    {runningAll
+                      ? "Iniciando corrida completa…"
+                      : "Correr todo (sin intervención)"}
+                  </button>
+                )}
               </div>
               {approveError && (
                 <p className="stepper-error-msg">{approveError}</p>
+              )}
+              {runAllError && (
+                <p className="stepper-error-msg">{runAllError}</p>
               )}
               {structureSavedNotice && !editingStructure && (
                 <p className="stepper-error-msg">

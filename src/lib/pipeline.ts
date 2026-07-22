@@ -11,17 +11,32 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { runAssemblyStage } from "./assembly-stage";
+import { hasCaptionsToAudit, runCaptionsAuditStage } from "./captions-audit-stage";
 import { runCaptionsStage } from "./captions-stage";
 import { runCutsStage } from "./cuts-stage";
+import { runDirectorStage } from "./director-stage";
 import { runFramesStage } from "./frames-stage";
+import { listRenderedLessonsInModule, runGate3Stage } from "./gate3-stage";
+import { hasGate1Composites, runGate1Stage } from "./gate1-stage";
+import { runGate2AllStage } from "./gate2-stage";
 import {
   cutsDir,
+  jobPath,
+  readApprovalJson,
   readFramesManifest,
   readJobJson,
+  readStructureJson,
   structureJsonPath,
   transcriptsDir,
   updateJobStatus,
 } from "./jobs";
+import { hasOverlayBriefsPrerequisites, runOverlayBriefsStage } from "./overlay-briefs-stage";
+import { hasOverlayGenPrerequisites, runOverlayGenStage } from "./overlay-gen-stage";
+import {
+  hasOverlaysTimelinePrerequisites,
+  runOverlaysTimelineStage,
+} from "./overlays-timeline-stage";
+import { runPackageStage } from "./package-stage";
 import { runPlanStage } from "./plan-stage";
 import { runProbeStage } from "./probe-stage";
 import { runProxyStage } from "./proxy-stage";
@@ -489,6 +504,204 @@ async function executeAssembleOnly(
     // no disponible, etc.).
     const errorMessage =
       err instanceof Error ? err.message : "Error desconocido en el ensamblaje";
+    const current = await readJobJson(jobId).catch(() => null);
+    if (!current || current.status !== "error") {
+      await updateJobStatus(jobId, "error", { errorMessage });
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * runFullPipeline: modo "corre todo solo" (run-all).
+ * ------------------------------------------------------------------ */
+
+/**
+ * Indica si AUTO_APPROVE está habilitado (cualquier valor "1" o "true",
+ * sin distinguir mayúsculas), lo que permite correr `runFullPipeline` sobre
+ * un job cuya estructura todavía no fue aprobada por un humano
+ * (`plan/approval.json` ausente). Pensado para corridas desatendidas en
+ * CI/lotes, nunca como default silencioso.
+ */
+export function isAutoApproveEnabled(): boolean {
+  const raw = (process.env.AUTO_APPROVE ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true";
+}
+
+/**
+ * Verifica (tolerante) si `qa/gate1.json` tiene al menos una imagen con
+ * `verdict: "REJECTED"`. Se usa solo dentro de `runFullPipeline` para
+ * decidir si hace falta invocar al director tras Gate 1 — no hay helper
+ * exportado de gate1-stage.ts para esto porque ninguna otra etapa lo
+ * necesita.
+ */
+async function hasGate1Rejections(jobId: string): Promise<boolean> {
+  try {
+    const raw = await fs.readFile(
+      path.join(jobPath(jobId), "qa", "gate1.json"),
+      "utf-8"
+    );
+    const verdict = JSON.parse(raw) as {
+      images?: Array<{ verdict?: string }>;
+    };
+    return (
+      Array.isArray(verdict.images) &&
+      verdict.images.some((image) => image.verdict === "REJECTED")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Corre el pipeline completo desatendido ("corre todo solo") para un job ya
+ * aprobado (o con AUTO_APPROVE): prep -> audit-captions -> overlay-briefs ->
+ * overlay-gen (si CDP disponible; se salta sin cortar la cadena si no) ->
+ * gate1 (con el director de edición si hay rechazos) -> overlays-timeline ->
+ * assemble -> Gate 2 de todas las clases en paralelo (con el director si hay
+ * rechazos) -> Gate 3 por módulo -> empaquetado.
+ *
+ * Reutiliza el mismo registro `running` que el resto del pipeline (dedup):
+ * si ya hay una corrida en curso para el jobId (de cualquier etapa), esta
+ * llamada devuelve esa misma promesa en vez de arrancar una nueva.
+ *
+ * Cada eslabón ya existe como stage/endpoint (ver los demás `run*Stage` de
+ * este archivo y de `gate1-stage.ts`/`gate2-stage.ts`/`gate3-stage.ts`/
+ * `director-stage.ts`/`package-stage.ts`): esto es solo el encadenamiento,
+ * llamando directo a las funciones internas (no a los wrappers `run*Only`,
+ * que reusarían el mismo registro `running` y quedarían esperando a sí
+ * mismos). No hay loops de corrección propios: por diseño (ver NOTES del
+ * issue), Gate 2 corre en modo "todas las clases" (`runGate2AllStage`) y
+ * cualquier rechazo (de Gate 1 o de Gate 2) se delega en el director de
+ * edición (`runDirectorStage`), que ya trae su propio loop de hasta 3
+ * vueltas (ver `.claude/commands/director-edicion.md`) — correr un loop acá
+ * además sería redundante.
+ *
+ * Cualquier error real (no un veredicto REJECTED, que es un resultado
+ * esperado del QA) detiene la cadena y deja al job en status 'error' con
+ * `errorMessage` describiendo en qué eslabón falló.
+ */
+export function runFullPipeline(jobId: string): Promise<void> {
+  const existing = running.get(jobId);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = executeFullPipeline(jobId).finally(() => {
+    running.delete(jobId);
+  });
+
+  running.set(jobId, promise);
+  return promise;
+}
+
+/** Ejecuta el encadenamiento completo de `runFullPipeline`, con manejo de error. */
+async function executeFullPipeline(jobId: string): Promise<void> {
+  try {
+    const approval = await readApprovalJson(jobId);
+    if (!approval && !isAutoApproveEnabled()) {
+      throw new Error(
+        `No se puede correr el pipeline completo: la estructura del job "${jobId}" no está aprobada (falta plan/approval.json) y AUTO_APPROVE no está habilitado.`
+      );
+    }
+
+    console.log(`[run-all:${jobId}] prep (silencio/proxies/cortes/captions)`);
+    await runPrepStages(jobId);
+
+    if (await hasCaptionsToAudit(jobId)) {
+      console.log(`[run-all:${jobId}] audit-captions`);
+      await runCaptionsAuditStage(jobId);
+    }
+
+    if (await hasOverlayBriefsPrerequisites(jobId)) {
+      console.log(`[run-all:${jobId}] overlay-briefs`);
+      await runOverlayBriefsStage(jobId);
+
+      if (await hasOverlayGenPrerequisites(jobId)) {
+        console.log(`[run-all:${jobId}] overlay-gen`);
+        try {
+          await runOverlayGenStage(jobId);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (message.includes("CDP")) {
+            // CDP no disponible (Chrome sin --remote-debugging-port o sin
+            // sesión de chatgpt.com): se salta sin cortar la cadena, per
+            // spec ("overlay-gen solo si CDP disponible").
+            console.warn(
+              `[run-all:${jobId}] overlay-gen omitido (CDP no disponible): ${message}`
+            );
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      if (await hasGate1Composites(jobId)) {
+        console.log(`[run-all:${jobId}] gate1`);
+        await runGate1Stage(jobId);
+
+        if (await hasGate1Rejections(jobId)) {
+          console.log(
+            `[run-all:${jobId}] director de edición (rechazos en Gate 1)`
+          );
+          await runDirectorStage(jobId);
+        }
+      }
+    }
+
+    if (await hasOverlaysTimelinePrerequisites(jobId)) {
+      console.log(`[run-all:${jobId}] overlays-timeline`);
+      await runOverlaysTimelineStage(jobId);
+    }
+
+    console.log(`[run-all:${jobId}] assemble (intros + ensamblaje)`);
+    await runAssemblyStage(jobId);
+
+    console.log(`[run-all:${jobId}] gate2-all (todas las clases, en paralelo)`);
+    const gate2Results = await runGate2AllStage(jobId);
+    const gate2Errors = gate2Results.filter((result) => result.error);
+    if (gate2Errors.length > 0) {
+      throw new Error(
+        `Gate 2 falló para ${gate2Errors.length} clase(s) del job "${jobId}": ${gate2Errors
+          .map((result) => `${result.lessonId}: ${result.error}`)
+          .join("; ")}`
+      );
+    }
+
+    const anyGate2Rejected = gate2Results.some(
+      (result) => result.verdict === "REJECTED"
+    );
+    if (anyGate2Rejected) {
+      console.log(
+        `[run-all:${jobId}] director de edición (rechazos en Gate 2)`
+      );
+      await runDirectorStage(jobId);
+    }
+
+    const structure = await readStructureJson(jobId);
+    if (structure) {
+      for (const moduleEntry of structure.modules) {
+        const renderedLessonIds = await listRenderedLessonsInModule(
+          jobId,
+          moduleEntry.id
+        );
+        if (renderedLessonIds.length === 0) {
+          continue;
+        }
+        console.log(`[run-all:${jobId}] gate3 (módulo ${moduleEntry.id})`);
+        await runGate3Stage(jobId, moduleEntry.id);
+      }
+    }
+
+    console.log(`[run-all:${jobId}] package (empaquetado de entrega)`);
+    await runPackageStage(jobId);
+
+    console.log(`[run-all:${jobId}] corrida completa terminada`);
+  } catch (err) {
+    const errorMessage =
+      err instanceof Error
+        ? err.message
+        : "Error desconocido en la corrida completa (run-all)";
+    console.error(`[run-all:${jobId}] error: ${errorMessage}`);
     const current = await readJobJson(jobId).catch(() => null);
     if (!current || current.status !== "error") {
       await updateJobStatus(jobId, "error", { errorMessage });
