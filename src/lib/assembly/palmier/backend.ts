@@ -375,6 +375,18 @@ export const palmierBackend: AssemblyBackend = {
       }
     }
 
+    // Palmier auto-conforma la resolución del timeline a la del PRIMER clip
+    // agregado (verificado en vivo: aunque set_project_settings 1920x1080 se
+    // llamó ANTES de add_clips/insert_clips, el timeline terminó en 607x1080).
+    // Por eso se repite acá, después de add_clips y del insert del intro y
+    // antes de captions/overlays/export, igual que la advertencia del diseño
+    // sobre el auto-conform a 4K cuando el primer clip viene en esa resolución.
+    await client.call("set_project_settings", {
+      width: plan.width,
+      height: plan.height,
+      fps: plan.fps,
+    });
+
     // Offset REAL de intro para captions/overlays: 0 si el intro estaba
     // planeado pero no se llegó a insertar (archivo ausente en disco u otra
     // falla), nunca derivado de `plan.intro` a ciegas (ver FLUJO-AGROMAX-2tl).
