@@ -8,9 +8,17 @@
  * estructura del curso). El resto de los clips (broll/descartar/otro_curso)
  * no se tocan acá.
  *
+ * Por cada clip se prefiere su proxy de edición (assets/proxies/<basename>.mp4,
+ * generado por proxy-stage.ts) como entrada de silencedetect si existe: son
+ * CFR a PROXY_FPS con el mismo audio y la misma duración que el original, así
+ * que medir el silencio ahí es equivalente y más consistente con lo que
+ * después corta cuts-stage.ts (que también trabaja sobre proxies). Si el
+ * proxy no existe todavía se cae a source/<clip> como antes.
+ *
  * INVARIANTE: igual que frames-stage.ts y transcribe/index.ts, esta etapa
- * SOLO LEE de source/ (para correr ffmpeg silencedetect); jamás escribe,
- * mueve ni borra nada ahí dentro.
+ * jamás escribe, mueve ni borra nada dentro de source/ ni de assets/proxies/;
+ * solo los lee (proxy si existe, si no source/) para correr ffmpeg
+ * silencedetect.
  *
  * Se procesa un clip a la vez (secuencial): silencedetect es rápido (no
  * decodifica a un archivo de salida, solo analiza el audio con -f null) y no
@@ -19,9 +27,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
+import { promises as fs } from "node:fs";
 import { resolveFfmpegBin } from "./ffmpeg";
 import { SILENCE_MIN_D, SILENCE_NOISE_DB, CUT_PADDING_SECONDS } from "./constants";
 import {
+  proxiesDir,
   readMediaJson,
   readStructureJson,
   sourcePath,
@@ -65,6 +75,48 @@ function collectLessonClips(structure: StructureJson): Map<string, "demo" | "nor
     }
   }
   return clips;
+}
+
+/** Ruta absoluta al proxy de edición de un clip dentro de assets/proxies/ (mismo helper de ruta que usa proxy-stage.ts). */
+function proxyPathFor(jobId: string, clip: string): string {
+  const baseName = path.basename(clip, path.extname(clip));
+  return path.join(proxiesDir(jobId), `${baseName}.mp4`);
+}
+
+/** Verifica que un archivo exista y sea legible. */
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resuelve el archivo de entrada a usar para silencedetect de un clip:
+ * prefiere el proxy (assets/proxies/<basename>.mp4) si existe, y si no cae a
+ * source/<clip>. Si ninguno de los dos existe, lanza un error claro con el
+ * clip y las dos rutas buscadas (en vez de dejar que ffmpeg falle con un
+ * genérico "No such file or directory").
+ */
+async function resolveSilenceInputFile(
+  jobId: string,
+  clip: string
+): Promise<string> {
+  const proxyFile = proxyPathFor(jobId, clip);
+  if (await fileExists(proxyFile)) {
+    return proxyFile;
+  }
+
+  const srcFile = path.join(sourcePath(jobId), clip);
+  if (await fileExists(srcFile)) {
+    return srcFile;
+  }
+
+  throw new Error(
+    `No se encontró el clip '${clip}' ni en el proxy (${proxyFile}) ni en source (${srcFile})`
+  );
 }
 
 /** Línea 'lavfi.silence_start=X' del stdout de ametadata. */
@@ -217,8 +269,9 @@ function trimmableSeconds(silence: SilenceInterval): number {
  *   siempre lo medido).
  *
  * Idempotente: sobrescribe por completo probe/silence.json en cada corrida.
- * NUNCA toca jobs/<id>/source/: solo lo lee para correr ffmpeg (ver
- * invariante en el header de este archivo).
+ * NUNCA toca jobs/<id>/source/ ni jobs/<id>/assets/proxies/: solo los lee
+ * (proxy si existe, si no source/) para correr ffmpeg (ver invariante en el
+ * header de este archivo).
  */
 export async function runSilenceStage(jobId: string): Promise<SilenceJson> {
   const structure = await readStructureJson(jobId);
@@ -238,9 +291,9 @@ export async function runSilenceStage(jobId: string): Promise<SilenceJson> {
   for (const [filename, kind] of lessonClips) {
     const mediaEntry = media?.find((m) => m.filename === filename);
     const rawSeconds = mediaEntry?.durationSeconds ?? 0;
-    const srcFile = path.join(sourcePath(jobId), filename);
+    const inputFile = await resolveSilenceInputFile(jobId, filename);
 
-    const silences = await detectSilences(srcFile, rawSeconds);
+    const silences = await detectSilences(inputFile, rawSeconds);
     const skipped = kind === "demo";
 
     let totalSilentSeconds: number;
