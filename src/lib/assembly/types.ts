@@ -249,6 +249,19 @@ export interface AssemblyBackend {
     plan: LessonAssemblyPlan,
     onProgress?: (p: RenderProgress) => void
   ): Promise<RenderArtifact>;
+
+  /**
+   * Invalida cualquier cache de bundle/proceso asociado a `publicRoot`
+   * (jobs/<id>/assets). Opcional: un backend que no cachea nada (p.ej.
+   * Palmier) puede omitirlo o dejarlo como no-op.
+   *
+   * MOTIVACIÓN (Windows): en plataformas sin symlink de directorio (Remotion
+   * cae a copiar `publicDir` en vez de symlinkearlo), el primer bundle queda
+   * congelado con el contenido de `publicRoot` en ese instante. assembly-stage
+   * llama a esto entre la pasada de intros y la de ensamblaje para que el
+   * bundle de clases se regenere ya con los intros presentes en disco.
+   */
+  invalidateBundleCache?(publicRoot: string): void;
 }
 
 /**

@@ -139,11 +139,23 @@ export async function runAssemblyStage(
 
   const failures: string[] = [];
 
+  // Clases cuyo intro falló en la primera pasada: se saltan en la segunda
+  // (su error ya quedó registrado) en vez de intentar ensamblarlas sin él.
+  const introFailed = new Set<string>();
+
+  /* ============ PRIMERA PASADA — etapa 9: TODOS los intros ============
+   * Se renderizan todos los intros faltantes antes de tocar el ensamblaje
+   * de ninguna clase. Motivo (bug de Windows): sin Developer Mode,
+   * symlinkPublicDir falla y el bundler de Remotion COPIA public/ al primer
+   * getBundle. Si esa primera vez ocurriera durante un renderIntro con
+   * assets/intros/ todavía incompleto, el bundle cacheado en memoria
+   * quedaría congelado sin los intros para todo el resto del job.
+   * Terminando esta pasada primero, assets/intros/ ya tiene todo lo que va
+   * a tener antes de que exista cualquier bundle de la fase de clases. */
   for (const lesson of planned) {
     const entry = progress.lessons[lesson.lessonId];
 
     try {
-      /* ---------------- Etapa 9: intro ---------------- */
       if (force || !(await introExists(jobId, lesson.lessonId))) {
         entry.status = "intro";
         await persist();
@@ -160,8 +172,40 @@ export async function runAssemblyStage(
           outputPath: introPath(jobId, lesson.lessonId),
         });
       }
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Error desconocido al renderizar el intro";
+      entry.status = "error";
+      entry.error = message;
+      introFailed.add(lesson.lessonId);
+      failures.push(`${lesson.lessonId}: ${message}`);
+      await persist();
+      // Un intro que falla no aborta al resto: se sigue con las demás
+      // clases y esta se salta en la pasada de ensamblaje.
+    }
+  }
 
-      /* ------------- Etapa 11: ensamblaje ------------- */
+  // Entre las dos pasadas: cualquier bundle que ya se haya cacheado (por
+  // ejemplo el de los intros de más arriba) queda obsoleto, porque
+  // assets/intros/ recién ahora terminó de llenarse. Invalidarlo fuerza a
+  // que el bundle de la fase de clases se regenere con el public/ completo.
+  const publicRoots = new Set(planned.map((lesson) => lesson.plan.publicRoot));
+  for (const publicRoot of publicRoots) {
+    backend.invalidateBundleCache?.(publicRoot);
+  }
+
+  /* ========= SEGUNDA PASADA — etapa 11: ensamblaje de clases ========= */
+  for (const lesson of planned) {
+    const entry = progress.lessons[lesson.lessonId];
+    if (introFailed.has(lesson.lessonId)) {
+      // El error ya quedó registrado en la primera pasada; no se reintenta
+      // el ensamblaje de una clase cuyo intro no se pudo producir.
+      continue;
+    }
+
+    try {
       // La huella incluye el intro recién renderizado: si el intro cambió,
       // el render de la clase también queda obsoleto.
       const fingerprint = await fingerprintWithIntro(lesson.plan);

@@ -75,6 +75,21 @@ function getBundle(publicDir: string): Promise<string> {
   return created;
 }
 
+/**
+ * Descarta el bundle cacheado de `publicDir`, si existe. La próxima llamada a
+ * `getBundle` para ese mismo `publicDir` vuelve a bundlear desde cero.
+ *
+ * Necesario en Windows: sin Developer Mode, `symlinkPublicDir` falla y
+ * Remotion COPIA `publicDir` al bundlear en vez de symlinkearlo, así que el
+ * primer bundle (típicamente el del intro, cuando assets/intros/ todavía
+ * está vacío) queda congelado sin los assets generados después. Se llama
+ * entre la pasada de intros y la de ensamblaje para forzar un bundle nuevo
+ * con el public/ completo.
+ */
+export function clearBundleCache(publicDir: string): void {
+  bundleCache.delete(publicDir);
+}
+
 /** Normaliza separadores de Windows a "/" para que staticFile() los entienda. */
 function toPublicUrlPath(relPath: string): string {
   return relPath.split(path.sep).join("/");
@@ -259,5 +274,9 @@ export const remotionBackend: AssemblyBackend = {
       sizeBytes: probed.sizeBytes,
       renderedAt: new Date().toISOString(),
     } satisfies RenderArtifact;
+  },
+
+  invalidateBundleCache(publicRoot: string) {
+    clearBundleCache(publicRoot);
   },
 };
