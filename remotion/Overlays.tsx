@@ -43,6 +43,42 @@ import {
   OVERLAY_WIDTH_WIDE,
 } from "../src/lib/constants";
 
+/* ------------------------------------------------------------------ *
+ * Placa blanca semiopaca detrás de cada overlay (legibilidad sobre
+ * video, FLUJO-AGROMAX-4t7). El Gate 1 juzga el PNG aislado (fondo
+ * transparente); el Gate 2 juzga el video real, donde el PNG solo (trazo
+ * negro fino) queda ilegible sobre metrajes claros. La placa se dibuja
+ * en Remotion, detrás del <Img>, dimensionada al box renderizado del
+ * overlay (no al canvas) + padding, y comparte EXACTAMENTE la misma
+ * opacidad de entrada/salida que el PNG (ver `opacity` más abajo): nunca
+ * aparece/desaparece antes o después del overlay.
+ *
+ * Todos los valores están expresados en píxeles "a 1080p" (canvas de
+ * referencia 1920x1080) y se escalan por PLATE_SCALE_BASE_WIDTH para
+ * seguir viéndose bien si el canvas cambiara de resolución.
+ * ------------------------------------------------------------------ */
+
+/** Ancho de referencia (px) sobre el que están calibradas las constantes de la placa. */
+const PLATE_SCALE_BASE_WIDTH = 1920;
+
+/** Opacidad de la placa blanca (no del overlay): ~90% para no ocultar el metraje detrás. */
+const PLATE_OPACITY = 0.9;
+
+/** Radio de esquinas redondeadas de la placa, en px a 1080p. */
+const PLATE_RADIUS_PX = 20;
+
+/** Padding entre el borde del PNG renderizado y el borde de la placa, en px a 1080p. */
+const PLATE_PADDING_PX = 28;
+
+/** Difuminado de la sombra de la placa, en px a 1080p (sombra muy suave, sin borde duro). */
+const PLATE_SHADOW_BLUR_PX = 22;
+
+/** Desplazamiento vertical de la sombra de la placa, en px a 1080p. */
+const PLATE_SHADOW_OFFSET_Y_PX = 6;
+
+/** Opacidad de la sombra de la placa (independiente de PLATE_OPACITY). */
+const PLATE_SHADOW_OPACITY = 0.16;
+
 type OverlaysProps = {
   overlays: LessonCompositionProps["overlays"];
   /** Frame de salida en el que empieza el contenido (duración del intro). */
@@ -98,27 +134,57 @@ export const Overlays: React.FC<OverlaysProps> = ({ overlays, offsetFrames }) =>
     return null;
   }
 
+  // Escala de las constantes de la placa (calibradas a 1920px de ancho) al
+  // ancho real del canvas de salida.
+  const plateScale = width / PLATE_SCALE_BASE_WIDTH;
+  const platePadding = PLATE_PADDING_PX * plateScale;
+  const plateRadius = PLATE_RADIUS_PX * plateScale;
+  const plateShadowBlur = PLATE_SHADOW_BLUR_PX * plateScale;
+  const plateShadowOffsetY = PLATE_SHADOW_OFFSET_Y_PX * plateScale;
+
   return (
     <AbsoluteFill style={{ pointerEvents: "none" }}>
       {active.map((overlay) => {
         const displayWidth =
           (overlay.aspect < 0.6 ? OVERLAY_WIDTH_WIDE : OVERLAY_WIDTH) * width;
+        // `aspect` es alto/ancho real del PNG (ver assembly/types.ts): el
+        // <Img> conserva su propio aspect ratio con height: "auto", así que
+        // el alto renderizado real es displayWidth * aspect. La placa se
+        // dimensiona a ese box exacto (no al canvas), + padding.
+        const displayHeight = displayWidth * overlay.aspect;
+        // Misma opacidad para la placa y el PNG: comparten enter/exit
+        // exactamente, sin desfase.
         const opacity = overlayOpacity(contentFrame, overlay.startFrame, overlay.endFrame);
 
         return (
-          <Img
-            key={`${overlay.key}-${overlay.startFrame}`}
-            src={staticFile(overlay.file)}
-            style={{
-              position: "absolute",
-              left: width * OVERLAY_ANCHOR_X,
-              top: height * OVERLAY_ANCHOR_Y,
-              transform: "translate(-50%, -50%)",
-              width: displayWidth,
-              height: "auto",
-              opacity,
-            }}
-          />
+          <React.Fragment key={`${overlay.key}-${overlay.startFrame}`}>
+            <div
+              style={{
+                position: "absolute",
+                left: width * OVERLAY_ANCHOR_X,
+                top: height * OVERLAY_ANCHOR_Y,
+                transform: "translate(-50%, -50%)",
+                width: displayWidth + platePadding * 2,
+                height: displayHeight + platePadding * 2,
+                borderRadius: plateRadius,
+                backgroundColor: `rgba(255, 255, 255, ${PLATE_OPACITY})`,
+                boxShadow: `0 ${plateShadowOffsetY}px ${plateShadowBlur}px rgba(0, 0, 0, ${PLATE_SHADOW_OPACITY})`,
+                opacity,
+              }}
+            />
+            <Img
+              src={staticFile(overlay.file)}
+              style={{
+                position: "absolute",
+                left: width * OVERLAY_ANCHOR_X,
+                top: height * OVERLAY_ANCHOR_Y,
+                transform: "translate(-50%, -50%)",
+                width: displayWidth,
+                height: "auto",
+                opacity,
+              }}
+            />
+          </React.Fragment>
         );
       })}
     </AbsoluteFill>
