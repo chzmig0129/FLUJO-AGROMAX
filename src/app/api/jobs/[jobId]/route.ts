@@ -21,6 +21,7 @@ import {
   readCutsFiles,
   readDecisionesMd,
   readFramesManifest,
+  readGate2Verdict,
   readJobJson,
   readMediaJson,
   readPrepProgressJson,
@@ -106,6 +107,21 @@ export async function GET(
       readRenderSidecars(jobId),
     ]);
 
+    // Veredictos del Gate 2 (QA visual, etapa posterior al ensamblaje): uno
+    // por cada lección que ya tiene un render verificado. Lectura tolerante
+    // (readGate2Verdict devuelve null si la lección todavía no fue auditada).
+    const gate2Verdicts: Record<string, unknown | null> = {};
+    if (renders.length > 0) {
+      await Promise.all(
+        renders.map(async (r) => {
+          gate2Verdicts[r.lessonId] = await readGate2Verdict(
+            jobId,
+            r.lessonId
+          );
+        })
+      );
+    }
+
     return NextResponse.json({
       job,
       media,
@@ -122,6 +138,7 @@ export async function GET(
       prepProgress,
       assemblyProgress,
       renders: renders.length > 0 ? renders : null,
+      gate2Verdicts,
     });
   } catch {
     return NextResponse.json(

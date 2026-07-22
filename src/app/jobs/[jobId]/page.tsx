@@ -58,6 +58,26 @@ import type {
   Verdict,
 } from "@/lib/types";
 
+/**
+ * Forma de un problema detectado por el Gate 2 (QA visual post-ensamblaje)
+ * en uno de los frames de la clase renderizada.
+ */
+interface Gate2Problema {
+  frame: number;
+  tipo: string;
+  detalle: string;
+  severidad: string;
+}
+
+/** Forma del veredicto del Gate 2 leído de qa/gate2/<lessonId>.json. */
+interface Gate2Verdict {
+  lessonId: string;
+  auditedAt: string;
+  verdict: "APPROVED" | "REJECTED";
+  frames_revisados: number;
+  problemas: Gate2Problema[];
+}
+
 /** Forma del summary.json que arma la etapa de transcripción. */
 interface SummaryFile {
   filename: string;
@@ -88,6 +108,8 @@ interface JobApiResponse {
   assemblyProgress: AssemblyProgressJson | null;
   /** Sidecars de los renders YA VERIFICADOS como completos (o null si no hay). */
   renders: RenderSidecar[] | null;
+  /** Veredicto del Gate 2 (QA visual) por lección, o null si aún no fue auditada. */
+  gate2Verdicts?: Record<string, Gate2Verdict | null>;
 }
 
 const POLL_INTERVAL_MS = 2000;
@@ -257,6 +279,11 @@ export default function JobPage() {
   const [prepError, setPrepError] = useState<string | null>(null);
   const [assembling, setAssembling] = useState(false);
   const [assembleError, setAssembleError] = useState<string | null>(null);
+
+  // Gate 2 (QA visual post-ensamblaje): se dispara por lección, así que se
+  // trackea cuál está corriendo y su error por separado.
+  const [gate2Loading, setGate2Loading] = useState<string | null>(null);
+  const [gate2Errors, setGate2Errors] = useState<Record<string, string>>({});
   const [showMaster, setShowMaster] = useState(false);
   const [masterText, setMasterText] = useState<string | null>(null);
   const [masterLoading, setMasterLoading] = useState(false);
@@ -767,6 +794,46 @@ export default function JobPage() {
     [jobId, startPolling]
   );
 
+  /**
+   * Dispara el QA visual (Gate 2) de una clase ya ensamblada vía
+   * POST /api/jobs/<id>/gate2 {lessonId}. Refetchea el job al terminar (no
+   * usa el polling: el veredicto no cambia el status del job).
+   */
+  const handleGate2 = useCallback(
+    async (lessonId: string) => {
+      setGate2Errors((prev) => {
+        const next = { ...prev };
+        delete next[lessonId];
+        return next;
+      });
+      setGate2Loading(lessonId);
+      try {
+        const res = await fetch(`/api/jobs/${jobId}/gate2`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ lessonId }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          setGate2Errors((prev) => ({
+            ...prev,
+            [lessonId]: body?.error ?? "No se pudo correr el QA visual.",
+          }));
+          return;
+        }
+        await loadJob();
+      } catch {
+        setGate2Errors((prev) => ({
+          ...prev,
+          [lessonId]: "No se pudo correr el QA visual.",
+        }));
+      } finally {
+        setGate2Loading(null);
+      }
+    },
+    [jobId, loadJob]
+  );
+
   const handleToggleMaster = useCallback(async () => {
     const next = !showMaster;
     setShowMaster(next);
@@ -820,6 +887,7 @@ export default function JobPage() {
     prepProgress,
     assemblyProgress,
     renders,
+    gate2Verdicts,
   } = data;
   const isError = job.status === "error";
   // El job puede reintentar solo el plan (sin re-transcribir) si falló
@@ -1843,6 +1911,68 @@ export default function JobPage() {
                               ? " · reutilizado (sin cambios)"
                               : ""}
                           </p>
+
+                          {(() => {
+                            const verdict =
+                              gate2Verdicts?.[lesson.lessonId] ?? null;
+                            const running = gate2Loading === lesson.lessonId;
+                            const error = gate2Errors[lesson.lessonId];
+                            return (
+                              <div className="gate2-block">
+                                <div className="stepper-actions">
+                                  {verdict === null && (
+                                    <span className="badge">— sin QA</span>
+                                  )}
+                                  {verdict?.verdict === "APPROVED" && (
+                                    <span className="badge">
+                                      ✅ APROBADA
+                                    </span>
+                                  )}
+                                  {verdict?.verdict === "REJECTED" && (
+                                    <span className="badge badge-error">
+                                      ❌ RECHAZADA (
+                                      {verdict.problemas.length} problema
+                                      {verdict.problemas.length === 1
+                                        ? ""
+                                        : "s"}
+                                      )
+                                    </span>
+                                  )}
+                                  <button
+                                    className="btn btn-secondary"
+                                    type="button"
+                                    onClick={() =>
+                                      handleGate2(lesson.lessonId)
+                                    }
+                                    disabled={running}
+                                  >
+                                    {running ? "Corriendo QA…" : "QA visual"}
+                                  </button>
+                                </div>
+                                {error && (
+                                  <p className="stepper-error-msg">{error}</p>
+                                )}
+                                {verdict?.verdict === "REJECTED" &&
+                                  verdict.problemas.length > 0 && (
+                                    <details className="cuts-details">
+                                      <summary>
+                                        Ver problemas detectados
+                                      </summary>
+                                      <ul className="cuts-list">
+                                        {verdict.problemas.map(
+                                          (p, idx) => (
+                                            <li key={`${p.frame}-${idx}`}>
+                                              frame {p.frame} — {p.tipo} (
+                                              {p.severidad}): {p.detalle}
+                                            </li>
+                                          )
+                                        )}
+                                      </ul>
+                                    </details>
+                                  )}
+                              </div>
+                            );
+                          })()}
                         </>
                       ) : null}
                     </div>

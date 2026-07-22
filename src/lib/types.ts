@@ -484,3 +484,34 @@ export interface RenderSidecar {
   sourcesFingerprint: string;
   renderedAt: string;
 }
+
+/* ------------------------------------------------------------------ *
+ * Etapa 14 (Gate 2: QA visual sobre el render final)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Un único frame extraído de render/<lessonId>.mp4 para el QA visual.
+ * - 'intro': el frame fijo dentro del intro (t=2.5s).
+ * - 'caption': un frame dirigido a coincidir con un caption (inicio, medio,
+ *   final del listado de plan/captions/<lessonId>.json).
+ * - 'random': uno de los muestreos aleatorios uniformes del resto del video.
+ */
+export interface Gate2Frame {
+  file: string;
+  kind: "intro" | "caption" | "random";
+  timeSeconds: number;
+}
+
+/**
+ * Representación persistida de
+ * jobs/<id>/qa/gate2/frames/<lessonId>/manifest.json (etapa 14): el listado
+ * de frames extraídos del render final de una clase para que el agente de
+ * QA visual (Gate 2) los evalúe.
+ */
+export interface Gate2FramesManifest {
+  lessonId: string;
+  generatedAt: string;
+  videoPath: string;
+  durationSeconds: number;
+  frames: Gate2Frame[];
+}

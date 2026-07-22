@@ -21,6 +21,7 @@ import type {
   CaptionsFile,
   CutsFile,
   FramesManifest,
+  Gate2FramesManifest,
   JobJson,
   JobStatus,
   MediaInfo,
@@ -714,6 +715,70 @@ export async function readRenderSidecars(
     if (sidecar) results.push(sidecar);
   }
   return results;
+}
+
+/* ------------------------------------------------------------------ *
+ * Etapa 14 (Gate 2: QA visual sobre el render final)
+ * ------------------------------------------------------------------ */
+
+/** Ruta absoluta al subdirectorio de QA de un job. */
+export function qaDir(id: string): string {
+  return path.join(jobPath(id), "qa");
+}
+
+/** Ruta absoluta al subdirectorio de Gate 2 (QA visual) de un job. */
+export function gate2Dir(id: string): string {
+  return path.join(qaDir(id), "gate2");
+}
+
+/** Ruta absoluta al subdirectorio de frames extraídos de Gate 2 de una clase. */
+export function gate2FramesDir(id: string, lessonId: string): string {
+  return path.join(gate2Dir(id), "frames", lessonId);
+}
+
+/** Ruta absoluta a qa/gate2/frames/<lessonId>/manifest.json de un job. */
+export function gate2ManifestPath(id: string, lessonId: string): string {
+  return path.join(gate2FramesDir(id, lessonId), "manifest.json");
+}
+
+/** Ruta absoluta al veredicto de Gate 2 de una clase: qa/gate2/<lessonId>.json. */
+export function gate2VerdictPath(id: string, lessonId: string): string {
+  return path.join(gate2Dir(id), `${lessonId}.json`);
+}
+
+/**
+ * Lee qa/gate2/<lessonId>.json de un job. Devuelve null si todavía no existe
+ * o si el contenido no es JSON válido (parseo tolerante: un veredicto a
+ * medio escribir no debe tumbar al que lo consume), en vez de lanzar un
+ * error. El tipo se deja sin normalizar (unknown): quien lo consume decide
+ * la forma exacta del veredicto.
+ */
+export async function readGate2Verdict(
+  id: string,
+  lessonId: string
+): Promise<unknown | null> {
+  try {
+    const raw = await fs.readFile(gate2VerdictPath(id, lessonId), "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Escribe (o sobrescribe) qa/gate2/frames/<lessonId>/manifest.json de un job
+ * (etapa 14). Crea el directorio de forma recursiva si todavía no existe.
+ */
+export async function writeGate2FramesManifest(
+  id: string,
+  manifest: Gate2FramesManifest
+): Promise<void> {
+  await fs.mkdir(gate2FramesDir(id, manifest.lessonId), { recursive: true });
+  await fs.writeFile(
+    gate2ManifestPath(id, manifest.lessonId),
+    JSON.stringify(manifest, null, 2),
+    "utf-8"
+  );
 }
 
 /**
