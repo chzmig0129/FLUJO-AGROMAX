@@ -498,7 +498,7 @@ export interface RenderSidecar {
  */
 export interface Gate2Frame {
   file: string;
-  kind: "intro" | "caption" | "random";
+  kind: "intro" | "caption" | "random" | "overlay" | "inicio" | "final";
   timeSeconds: number;
 }
 

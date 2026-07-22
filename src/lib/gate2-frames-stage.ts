@@ -9,12 +9,22 @@
  * "ffprobe dice que mide lo que debía"— de que el intro, los captions y el
  * resto del video quedaron bien.
  *
- * Tres tipos de frames, cada uno con un propósito distinto:
+ * Seis tipos de frames, cada uno con un propósito distinto:
  *   - 'intro': 1 frame fijo en t=2.5s (mitad del intro de 5s), para
  *     confirmar que el intro se ve bien sin tener que abrir el video.
  *   - 'caption': 3 frames alineados a captions concretos (primero, medio,
  *     último de plan/captions/<lessonId>.json), para confirmar que el texto
  *     karaoke se ve legible y en el lugar correcto.
+ *   - 'overlay': 1 frame por cada overlay de
+ *     plan/overlays-timeline/<lessonId>.json (si existe), en el punto medio
+ *     de su ventana en pantalla, para confirmar que la imagen no tapa la
+ *     cara del instructor, el subtítulo, ni lo que se está mostrando en ese
+ *     momento exacto.
+ *   - 'inicio': 1 frame justo después del intro, en el primer frame de
+ *     CONTENIDO de la clase, para confirmar que el video arranca en
+ *     contenido real (sin conteo 3-2-1, sin claqueta).
+ *   - 'final': 1 frame cerca del final del render, para confirmar que el
+ *     video corta limpio (sin frase a medias ni frame congelado).
  *   - 'random': 8 frames aleatorios uniformes sobre el resto del video, para
  *     pescar cualquier cosa rota (glitch de corte, freeze, negro) que un
  *     muestreo dirigido no vería.
@@ -34,11 +44,13 @@ import { ffprobePath } from "./probe";
 import { INTRO_DURATION_FRAMES } from "./constants";
 import {
   gate2FramesDir,
+  planDir,
   readCaptionsJson,
   renderPath,
   writeGate2FramesManifest,
 } from "./jobs";
 import type { Gate2Frame, Gate2FramesManifest } from "./types";
+import type { OverlayTimelineFile } from "./assembly/types";
 
 const execFileAsync = promisify(execFile);
 
@@ -47,6 +59,17 @@ const RANDOM_FRAME_COUNT = 8;
 
 /** Timestamp fijo (segundos) del frame dirigido al intro (5s de intro, mitad). */
 const INTRO_FRAME_TIME_SECONDS = 2.5;
+
+/**
+ * Frames de margen, sobre el fps del render, que se suman al primer frame de
+ * contenido (tras el intro) para el frame 'inicio': evita capturar el frame
+ * exacto de corte (que a veces conserva un resto del frame anterior) y da un
+ * frame ya establecido de contenido real.
+ */
+const INICIO_FRAME_MARGIN_FRAMES = 3;
+
+/** Margen (segundos) que se resta a la duración total para el frame 'final'. */
+const FINAL_FRAME_MARGIN_SECONDS = 0.3;
 
 /** Margen (segundos) que se deja al final del video al elegir frames aleatorios, para no caer justo en el último frame/EOF. */
 const RANDOM_WINDOW_END_MARGIN_SECONDS = 1;
@@ -162,11 +185,38 @@ function pickRandomTimestamps(
 }
 
 /**
+ * Lee plan/overlays-timeline/<lessonId>.json (etapa post-Gate 1, ver
+ * overlays-timeline-stage.ts) directo con fs, sin pasar por jobs.ts (esta
+ * etapa no debe tocar jobs.ts). Devuelve null si el archivo no existe
+ * todavía (job sin overlays, o corrido antes de esa etapa) o no es JSON
+ * válido — en ambos casos simplemente no se agregan frames de tipo
+ * 'overlay', el resto de la etapa sigue funcionando igual.
+ */
+async function readOverlaysTimelineJson(
+  jobId: string,
+  lessonId: string
+): Promise<OverlayTimelineFile | null> {
+  try {
+    const filePath = path.join(
+      planDir(jobId),
+      "overlays-timeline",
+      `${lessonId}.json`
+    );
+    const raw = await fs.readFile(filePath, "utf-8");
+    return JSON.parse(raw) as OverlayTimelineFile;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Corre la etapa de extracción de frames de Gate 2 para una clase: valida
  * que render/<lessonId>.mp4 exista, mide su duración/fps con ffprobe, elige
- * 1 frame de intro + 3 de captions + 8 aleatorios, los extrae a resolución
- * completa con ffmpeg y escribe manifest.json. Borra y recrea el directorio
- * de frames de esa lección en cada corrida (idempotente).
+ * 1 frame de intro + 3 de captions + 1 por overlay (si hay
+ * plan/overlays-timeline/<lessonId>.json) + inicio + final + 8 aleatorios,
+ * los extrae a resolución completa con ffmpeg y escribe manifest.json.
+ * Borra y recrea el directorio de frames de esa lección en cada corrida
+ * (idempotente).
  */
 export async function runGate2FramesStage(
   jobId: string,
@@ -225,7 +275,41 @@ export async function runGate2FramesStage(
     });
   }
 
-  // 3) 8 frames aleatorios uniformes en [intro_end+1, duration-1].
+  // 3) 1 frame por overlay de plan/overlays-timeline/<lessonId>.json (si la
+  // etapa post-Gate 1 ya corrió para esta clase), en el punto medio de su
+  // ventana en pantalla — mismo espacio de frames que captions (relativo al
+  // primer frame de contenido, sin offset de intro, sumado acá).
+  const overlaysTimeline = await readOverlaysTimelineJson(jobId, lessonId);
+  if (overlaysTimeline && overlaysTimeline.overlays.length > 0) {
+    const overlayFps = overlaysTimeline.fps > 0 ? overlaysTimeline.fps : fps;
+    overlaysTimeline.overlays.forEach((overlay, index) => {
+      const midFrame = Math.floor((overlay.startFrame + overlay.endFrame) / 2);
+      const timeSeconds = (INTRO_DURATION_FRAMES + midFrame) / overlayFps;
+      toExtract.push({
+        kind: "overlay",
+        timeSeconds,
+        file: `overlay_${index + 1}.png`,
+      });
+    });
+  }
+
+  // 4) 'inicio': primer frame de contenido tras el intro (para cazar
+  // conteos 3-2-1, claquetas o media palabra que no deberían estar ahí).
+  toExtract.push({
+    kind: "inicio",
+    timeSeconds: (INTRO_DURATION_FRAMES + INICIO_FRAME_MARGIN_FRAMES) / fps,
+    file: "inicio.png",
+  });
+
+  // 5) 'final': cerca del último frame del render (para cazar cortes a
+  // media frase o frames congelados en el cierre).
+  toExtract.push({
+    kind: "final",
+    timeSeconds: durationSeconds - FINAL_FRAME_MARGIN_SECONDS,
+    file: "final.png",
+  });
+
+  // 6) 8 frames aleatorios uniformes en [intro_end+1, duration-1].
   const introEndSeconds = INTRO_DURATION_FRAMES / fps;
   const randomStart = introEndSeconds + RANDOM_WINDOW_START_MARGIN_SECONDS;
   const randomEnd = durationSeconds - RANDOM_WINDOW_END_MARGIN_SECONDS;

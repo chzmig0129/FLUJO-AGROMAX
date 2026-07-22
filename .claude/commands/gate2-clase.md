@@ -26,13 +26,13 @@ Lee, en este orden, con la herramienta Read:
      durationSeconds: number;
      frames: Array<{
        file: string; // nombre del PNG dentro del mismo directorio que el manifest
-       kind: "intro" | "caption" | "random";
+       kind: "intro" | "caption" | "random" | "overlay" | "inicio" | "final";
        timeSeconds: number;
      }>;
    }
    ```
 
-2. `jobs/<jobId>/plan/captions/<lessonId>.json` — el `CaptionsFile` de esta lección (contrato: `{lessonId, fps, generatedAt, captions: [{text, startFrame, endFrame, words}]}`). Lo usas como referencia exacta de qué texto DEBE verse en pantalla en cada instante — necesitas `fps` para convertir `startFrame`/`endFrame` a segundos (`frame / fps`) y así saber qué caption le toca a cada `timeSeconds` del manifest.
+2. `jobs/<jobId>/plan/captions/<lessonId>.json` — el `CaptionsFile` de esta lección (contrato: `{lessonId, fps, generatedAt, captions: [{text, startFrame, endFrame, words}]}`). Lo usas como referencia exacta de qué texto DEBE verse en pantalla en cada instante — necesitas `fps` para convertir `startFrame`/`endFrame` a segundos (`frame / fps`) y así saber qué caption le toca a cada `timeSeconds` del manifest. **También es la referencia para el checklist de frames `overlay`**: el caption activo en el `timeSeconds` de ese overlay es "de lo que está hablando" el instructor en ese momento.
 3. `config/glosario.md` (raíz del repo) — glosario semilla de ortografía del dominio. Si no existe, sigue solo con tu propio criterio.
 4. `jobs/<jobId>/plan/glosario.md` — glosario específico de este job, si existe.
 
@@ -51,6 +51,12 @@ Para cada frame, evalúa:
 5. **Sin frames negros/congelados/cortados**: la imagen no debe estar completamente negra, ni mostrar un artefacto de corte abrupto (franjas negras grandes, imagen partida a la mitad, etc.). "Congelado" no se puede confirmar con un solo frame aislado — si dudas, no lo reportes como bloqueante, repórtalo como menor si el frame se ve claramente anómalo respecto a los demás.
 6. **Overlays/logo (capas futuras)**: si el frame muestra algún overlay o logo superpuesto, confirma que no tapa ni la cara ni el subtítulo. Si no hay overlays visibles en este job todavía, no aplica — no lo reportes.
 
+### Checklist adicional por tipo de frame (`kind`)
+
+- **`overlay`**: además del checklist general, cotejando contra el caption activo en ese `timeSeconds` (calculado igual que en el punto 3 de arriba), evalúa: (a) ¿la imagen del overlay tapa la cara del instructor? (b) ¿tapa el subtítulo? (c) ¿tapa el objeto o la acción de la que está hablando el instructor en ese momento, según el caption activo? (d) ¿está bien colocada a la izquierda de la pantalla y se ve legible al tamaño en que se renderiza (no diminuta ni cortada en el borde)? Cualquier oclusión de cara o subtítulo es `tipo: "visual"`, `severidad: "bloqueante"`.
+- **`inicio`**: ¿el video arranca en contenido real — sin conteo tipo "3, 2, 1", sin claqueta, sin media palabra o gesto de "ya, ya" previo al inicio real de la explicación? Si detectas un conteo, claqueta o palabra cortada, repórtalo con `tipo: "corte"` y `severidad: "bloqueante"`.
+- **`final`**: ¿el video corta limpio — sin una frase a medias, sin frame congelado, sin corte abrupto en medio de una palabra o gesto? Si el corte es a media frase o el frame se ve congelado/roto, repórtalo con `tipo: "corte"` y `severidad: "bloqueante"`.
+
 ## 3. Salida obligatoria
 
 Escribe con Write, en `jobs/<jobId>/qa/gate2/<lessonId>.json`:
@@ -63,7 +69,7 @@ interface Gate2Verdict {
   frames_revisados: number; // cuántos frames del manifest efectivamente miraste
   problemas: Array<{
     frame: string; // el 'file' del frame del manifest donde se detectó
-    tipo: "subtitulo" | "visual" | "audio_sospecha" | "otro";
+    tipo: "subtitulo" | "visual" | "audio_sospecha" | "corte" | "otro";
     detalle: string; // descripción breve y concreta en español
     severidad: "bloqueante" | "menor";
   }>;
