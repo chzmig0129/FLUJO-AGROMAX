@@ -46,17 +46,56 @@ def log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
+def flatten_background(rgb):
+    """
+    Aplana el fondo casi-blanco con ruido/textura (grano de papel,
+    degradado suave, artefactos de compresión JPEG) para que el
+    flood-fill de blanco tenga una superficie realmente uniforme.
+
+    El JPG del generador no tiene un fondo blanco puro: tiene una
+    textura de papel y a veces un leve viñeteado (una esquina más
+    oscura que el resto). Con el umbral fijo THRESH, esas zonas caen
+    por debajo del umbral en un patrón moteado, lo que rompe la
+    conectividad del flood-fill y dispara dos fallas: (1) motas de
+    fondo que quedan opacas por no estar conectadas al borde, y (2)
+    con blur/threshold ingenuos, erosión que se come el dibujo.
+
+    Se estima el "piso" de fondo local con un MaxFilter (ventana mayor
+    al grosor de los trazos de tinta, así el filtro ignora los trazos
+    finos y devuelve el nivel de papel circundante) seguido de un
+    GaussianBlur para suavizar bloques JPEG, y se usa ese piso para
+    normalizar (flat-field) la luminancia: todo lo que sea papel queda
+    cerca de 255 sin importar el viñeteado/textura original, mientras
+    que la tinta (mucho más oscura que su entorno) se mantiene oscura.
+    """
+    import numpy as np
+    from PIL import Image, ImageFilter
+
+    im = Image.fromarray(rgb)
+    l = im.convert("L")
+    bg_est = l.filter(ImageFilter.MaxFilter(21)).filter(ImageFilter.GaussianBlur(15))
+    bg_arr = np.clip(np.asarray(bg_est).astype(np.float32), 1, 255)
+    scale = 255.0 / bg_arr
+    flat = np.clip(rgb.astype(np.float32) * scale[:, :, None], 0, 255)
+    return flat
+
+
 def border_flood_alpha(rgb):
     """
     Flood-fill del blanco desde los BORDES de la imagen: solo el blanco
     conectado al borde se vuelve transparente (alpha=0). Cualquier blanco
     interior (ej. el centro de una dona, el fondo de una tarjeta) se
     preserva opaco (alpha=255) porque nunca fue visitado por el flood.
+
+    La conectividad se calcula sobre una versión "aplanada" del fondo
+    (ver `flatten_background`) para no depender de que el JPG tenga un
+    blanco perfectamente uniforme.
     """
     import numpy as np
 
     h, w, _ = rgb.shape
-    white = np.all(rgb >= THRESH, axis=2)
+    flat = flatten_background(rgb)
+    white = np.all(flat >= THRESH, axis=2)
     visited = np.zeros((h, w), bool)
     dq = deque()
     for x in range(w):
