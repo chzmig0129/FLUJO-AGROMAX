@@ -277,11 +277,15 @@ async function waitForExport(
   for (;;) {
     const result = await client.call("manage_exports", { action: "list" });
     const r = toRecord(result);
-    const jobs = Array.isArray(r?.jobs)
-      ? (r!.jobs as Array<Record<string, unknown>>)
-      : Array.isArray(result)
-        ? (result as Array<Record<string, unknown>>)
-        : [];
+    // Shape real verificado en vivo: {"exports":[{filename, jobId, path, progress, status}]}.
+    // `jobs` y el array plano se conservan como fallback defensivo por si el backend cambia.
+    const jobs = Array.isArray(r?.exports)
+      ? (r!.exports as Array<Record<string, unknown>>)
+      : Array.isArray(r?.jobs)
+        ? (r!.jobs as Array<Record<string, unknown>>)
+        : Array.isArray(result)
+          ? (result as Array<Record<string, unknown>>)
+          : [];
     const job = jobs.find((j) => j.jobId === jobId || j.id === jobId);
     if (job) {
       const status = String(job.status ?? "").toLowerCase();
