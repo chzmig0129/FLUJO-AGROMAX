@@ -49,6 +49,22 @@
 
 const DEFAULT_MCP_URL = "http://127.0.0.1:19789/mcp";
 const DEFAULT_TIMEOUT_MS = 120_000;
+/** Backoff inicial (ms) y factor de multiplicación entre reintentos de "busy". */
+const BUSY_RETRY_INITIAL_DELAY_MS = 5_000;
+const BUSY_RETRY_BACKOFF_FACTOR = 1.5;
+/** Patrón de error reintentable: Palmier ocupado con otra acción del editor. */
+const BUSY_ERROR_PATTERN = /editor action is in progress/i;
+
+/** Número de reintentos para el error "busy" de Palmier (env PALMIER_BUSY_RETRIES). */
+function getBusyRetries(): number {
+  const raw = process.env.PALMIER_BUSY_RETRIES;
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 10;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /** Error específico de "no se pudo ni conectar" (server caído/URL mala). */
 class PalmierConnectionError extends Error {}
@@ -284,32 +300,47 @@ export class PalmierClient {
   async call(tool: string, args: object = {}, opts: PalmierCallOptions = {}): Promise<unknown> {
     await this.ensureInit();
     const timeoutMs = opts.timeoutMs ?? this.defaultTimeoutMs;
+    // El retry por "busy" vive DENTRO del callback encolado: así los
+    // reintentos de esta llamada ocupan el turno completo de la cola y
+    // ninguna otra llamada concurrente puede colarse entre reintentos.
     return this.enqueue(async () => {
-      const { json } = await this.postJsonRpc(
-        {
-          jsonrpc: "2.0",
-          id: this.nextId(),
-          method: "tools/call",
-          params: { name: tool, arguments: args },
-        },
-        timeoutMs
-      );
-      const response = json as JsonRpcResponse | null;
-      if (response?.error) {
-        throw new Error(
-          `Palmier MCP (${tool}) error JSON-RPC: ${response.error.message ?? JSON.stringify(response.error)}`
+      const maxRetries = getBusyRetries();
+      let delayMs = BUSY_RETRY_INITIAL_DELAY_MS;
+      for (let attempt = 0; ; attempt++) {
+        const { json } = await this.postJsonRpc(
+          {
+            jsonrpc: "2.0",
+            id: this.nextId(),
+            method: "tools/call",
+            params: { name: tool, arguments: args },
+          },
+          timeoutMs
         );
+        const response = json as JsonRpcResponse | null;
+        if (response?.error) {
+          throw new Error(
+            `Palmier MCP (${tool}) error JSON-RPC: ${response.error.message ?? JSON.stringify(response.error)}`
+          );
+        }
+        const result = response?.result;
+        if (!result) {
+          throw new Error(`Palmier MCP (${tool}): respuesta sin "result".`);
+        }
+        const content = Array.isArray(result.content) ? result.content : [];
+        const text = content.map((c) => c.text ?? "").join("\n");
+        if (result.isError) {
+          if (BUSY_ERROR_PATTERN.test(text) && attempt < maxRetries) {
+            console.warn(
+              `Palmier MCP (${tool}): "editor action is in progress", reintento ${attempt + 1}/${maxRetries} en ${delayMs}ms.`
+            );
+            await sleep(delayMs);
+            delayMs *= BUSY_RETRY_BACKOFF_FACTOR;
+            continue;
+          }
+          throw new Error(`Palmier MCP (${tool}): ${text || "error sin detalle"}`);
+        }
+        return text.length > 0 ? parseContentText(text) : content;
       }
-      const result = response?.result;
-      if (!result) {
-        throw new Error(`Palmier MCP (${tool}): respuesta sin "result".`);
-      }
-      const content = Array.isArray(result.content) ? result.content : [];
-      const text = content.map((c) => c.text ?? "").join("\n");
-      if (result.isError) {
-        throw new Error(`Palmier MCP (${tool}): ${text || "error sin detalle"}`);
-      }
-      return text.length > 0 ? parseContentText(text) : content;
     });
   }
 
