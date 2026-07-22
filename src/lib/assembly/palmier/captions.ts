@@ -205,17 +205,22 @@ function bestOverlapMatch(
  * 3. Barrido ventaneado (secuencial, ~1500 frames por llamada) de
  *    `get_timeline({captionDetail:true})` sobre el rango que ocupan las
  *    captions, matcheo por solapamiento de frames contra `plan.captions`
- *    (offset de intro = `plan.intro.durationInFrames`), y `update_text`
- *    (solo `content`, nunca timing) donde el texto difiera.
+ *    (offset de intro = `introFrames`, el offset REAL pasado por backend.ts:
+ *    0 si el intro no se llegó a insertar, ver FLUJO-AGROMAX-2tl), y
+ *    `update_text` (solo `content`, nunca timing) donde el texto difiera.
  */
 export async function applyCaptions(
   client: PalmierClient,
   plan: LessonAssemblyPlan,
-  jobId: string
+  jobId: string,
+  introFrames: number
 ): Promise<void> {
   if (plan.captions.length === 0) return;
 
-  const introOffsetFrames = plan.intro?.durationInFrames ?? 0;
+  // Offset REAL de intro, pasado por backend.ts: 0 si el intro estaba
+  // planeado pero no se insertó de verdad (archivo ausente en disco u otra
+  // falla), nunca derivado de `plan.intro` a ciegas (ver FLUJO-AGROMAX-2tl).
+  const introOffsetFrames = introFrames;
 
   const addResult = await client.call("add_captions", {
     animation: "highlightBlock",

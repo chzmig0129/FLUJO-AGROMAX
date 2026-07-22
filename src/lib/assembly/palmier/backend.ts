@@ -110,12 +110,39 @@ function extractJobId(result: unknown): string | null {
   return typeof direct === "string" ? direct : null;
 }
 
-type MediaAsset = { id?: unknown; name?: unknown; generationStatus?: unknown };
+/**
+ * Shape real de un asset registrado por Palmier (verificado en vivo, no el
+ * supuesto original): `name` es el BASENAME SIN EXTENSIÓN del archivo
+ * importado (ej. `"rumen-final"` para `rumen-final.mp4`), y `folder` es la
+ * ruta de carpeta bajo la que quedó registrado (ej. `"lesson-1/proxies"`
+ * cuando se importó un directorio `proxies` bajo el folder `"lesson-1"`).
+ */
+type MediaAsset = {
+  id?: unknown;
+  name?: unknown;
+  folder?: unknown;
+  generationStatus?: unknown;
+};
 
 function extractAssets(result: unknown): MediaAsset[] {
   const r = toRecord(result);
   const assets = r?.assets;
   return Array.isArray(assets) ? (assets as MediaAsset[]) : [];
+}
+
+/** Basename de un path SIN extensión, para matchear contra `asset.name`. */
+function basenameNoExt(p: string): string {
+  return path.basename(p, path.extname(p));
+}
+
+/**
+ * Carpeta bajo la que `import_media` registra los assets de un DIRECTORIO
+ * importado con `folder` = `lessonId`: replica el nombre del directorio como
+ * subcarpeta (ej. `import_media({source:{path:".../proxies"}, folder:"lesson-1"})`
+ * registra los assets bajo `"lesson-1/proxies"`).
+ */
+function importedDirFolder(lessonId: string, dir: string): string {
+  return `${lessonId}/${path.basename(dir)}`;
 }
 
 /**
@@ -161,25 +188,35 @@ async function waitForImportsReady(folder: string): Promise<void> {
   }
 }
 
-/** Mapa basename de archivo → mediaRef, para los assets ya importados a `folder`. */
-async function buildMediaMap(folder: string): Promise<Map<string, string>> {
-  const result = await client.call("get_media", { folder });
+/**
+ * Mapa `"${folder}::${basenameSinExt}"` → mediaRef, para TODOS los assets del
+ * proyecto: `get_media` SIN argumentos devuelve todos los assets (no filtra
+ * por `folder`, a diferencia de lo asumido originalmente), y `asset.name` ya
+ * viene sin extensión — el filtrado por carpeta se hace acá, en JS.
+ */
+async function buildMediaMap(): Promise<Map<string, string>> {
+  const result = await client.call("get_media", {});
   const assets = extractAssets(result);
   const map = new Map<string, string>();
   for (const asset of assets) {
-    if (typeof asset.id === "string" && typeof asset.name === "string") {
-      map.set(asset.name, asset.id);
+    if (
+      typeof asset.id === "string" &&
+      typeof asset.name === "string" &&
+      typeof asset.folder === "string"
+    ) {
+      map.set(`${asset.folder}::${asset.name}`, asset.id);
     }
   }
   return map;
 }
 
-function mediaRefFor(map: Map<string, string>, sourcePath: string): string {
-  const name = path.basename(sourcePath);
-  const ref = map.get(name);
+function mediaRefFor(map: Map<string, string>, sourcePath: string, folder: string): string {
+  const name = basenameNoExt(sourcePath);
+  const key = `${folder}::${name}`;
+  const ref = map.get(key);
   if (!ref) {
     throw new Error(
-      `Palmier: no se encontró el asset importado para "${name}" (esperado en get_media tras import_media).`
+      `Palmier: no se encontró el asset importado para "${name}" en la carpeta "${folder}" (esperado en get_media tras import_media).`
     );
   }
   return ref;
@@ -202,10 +239,13 @@ async function findContentVideoTrackIndex(expectedClipCount: number): Promise<nu
       if (typeof index === "number") return index;
     }
   }
-  // Fallback documentado: si el schema real no calza con lo esperado, se
-  // asume el track de video principal (índice 0) en vez de fallar duro acá
-  // — el error, si lo hay, aparecerá más claro al insertar el intro.
-  return 0;
+  // Track 0 está reservado (captions, ver captions.ts línea ~40): si ninguna
+  // pista de `get_timeline` calza con el conteo esperado de clips, el schema
+  // real difiere de lo asumido y NO se debe asumir 0 en silencio — eso podría
+  // insertar el intro sobre el track reservado. Fallar claro.
+  throw new Error(
+    `Palmier: no se pudo ubicar el track de video de contenido (se esperaban >= ${expectedClipCount} clips en alguna pista "video" de get_timeline). El track 0 está reservado para captions y no se usa como fallback.`
+  );
 }
 
 /** Arma los `entries` de `add_clips` para todo `plan.timeline`, secuencial desde el frame 0. */
@@ -215,7 +255,8 @@ function buildClipEntries(
 ): Array<{ mediaRef: string; startFrame: number; source: [number, number] }> {
   let cursor = 0;
   return plan.timeline.map((entry) => {
-    const mediaRef = mediaRefFor(mediaMap, entry.sourcePath);
+    const folder = importedDirFolder(plan.lessonId, path.dirname(entry.sourcePath));
+    const mediaRef = mediaRefFor(mediaMap, entry.sourcePath, folder);
     const clip = {
       mediaRef,
       startFrame: cursor,
@@ -306,7 +347,7 @@ export const palmierBackend: AssemblyBackend = {
 
     const importFolder = await importSources(plan);
     await waitForImportsReady(importFolder);
-    const mediaMap = await buildMediaMap(importFolder);
+    const mediaMap = await buildMediaMap();
 
     const clipEntries = buildClipEntries(plan, mediaMap);
     await client.call("add_clips", { entries: clipEntries });
@@ -317,7 +358,7 @@ export const palmierBackend: AssemblyBackend = {
     if (plan.intro) {
       try {
         await fs.access(plan.intro.sourcePath);
-        const introRef = mediaRefFor(mediaMap, plan.intro.sourcePath);
+        const introRef = mediaRefFor(mediaMap, plan.intro.sourcePath, importFolder);
         const videoTrackIndex = await findContentVideoTrackIndex(clipEntries.length);
         await client.call("insert_clips", {
           trackIndex: videoTrackIndex,
@@ -330,12 +371,17 @@ export const palmierBackend: AssemblyBackend = {
       }
     }
 
+    // Offset REAL de intro para captions/overlays: 0 si el intro estaba
+    // planeado pero no se llegó a insertar (archivo ausente en disco u otra
+    // falla), nunca derivado de `plan.intro` a ciegas (ver FLUJO-AGROMAX-2tl).
+    const introFrames = introInserted ? (plan.intro?.durationInFrames ?? 0) : 0;
+
     // Captions/overlays son contratos aparte (issues FLUJO-AGROMAX-9d0.3 y
     // FLUJO-AGROMAX-9d0.4): se llaman acá, entre insertar el intro y
     // exportar, tolerando que no hagan nada si el plan no trae captions u
     // overlays.
-    await applyCaptions(client, plan, plan.jobId);
-    await applyOverlays(client, plan, plan.jobId);
+    await applyCaptions(client, plan, plan.jobId, introFrames);
+    await applyOverlays(client, plan, plan.jobId, introFrames);
 
     const expectedFrames = introInserted
       ? plan.expectedFrames

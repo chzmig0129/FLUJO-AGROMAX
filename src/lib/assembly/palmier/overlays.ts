@@ -178,10 +178,12 @@ function fadeOpacityKeyframes(durationFrames: number): Array<[number, number]> {
 export async function applyOverlays(
   client: PalmierClient,
   plan: LessonAssemblyPlan,
-  jobId: string
+  jobId: string,
+  introFrames: number
 ): Promise<void> {
-  const introFrames = plan.intro?.durationInFrames ?? 0;
-
+  // `introFrames` es el offset REAL pasado por backend.ts: 0 si el intro
+  // estaba planeado pero no se insertó de verdad (archivo ausente en disco u
+  // otra falla), nunca derivado de `plan.intro` a ciegas (ver FLUJO-AGROMAX-2tl).
   if (plan.overlays.length > 0) {
     const mediaRefs: string[] = [];
     for (const item of plan.overlays) {
