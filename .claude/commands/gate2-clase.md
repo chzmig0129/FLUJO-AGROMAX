@@ -81,4 +81,3 @@ Reglas del veredicto:
 - Nunca reportes un defecto de ortografía en un subtítulo sin haberlo cotejado contra `plan/captions/<lessonId>.json` primero (regla de costo de la sección 2.3).
 - No llames a ninguna API de Anthropic ni uses tokens de facturación: todo el razonamiento y la visión los haces tú, la sesión de Claude Code, con tus herramientas normales (Read/Write).
 - No modifiques `plan/captions/<lessonId>.json`, el manifest de frames, ni ningún PNG — esta etapa es de solo lectura + un único archivo de salida.
-</content>

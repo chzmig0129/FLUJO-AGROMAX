@@ -114,6 +114,15 @@ interface JobApiResponse {
 
 const POLL_INTERVAL_MS = 2000;
 
+/**
+ * El juez de Gate 2 (fire-and-forget en el backend) puede tardar hasta
+ * GATE2_TIMEOUT_MIN=20min. Como el job queda en un status estable
+ * ('assembled') mientras corre, el polling general (startPolling) no lo
+ * recoge. Usamos un polling dedicado por lección tras el POST /gate2.
+ */
+const GATE2_POLL_INTERVAL_MS = 10_000;
+const GATE2_POLL_TIMEOUT_MS = 25 * 60 * 1000;
+
 /** Etapas mostradas en el stepper, en orden. */
 type StepKey =
   | "ingest"
@@ -307,6 +316,39 @@ export default function JobPage() {
   const [structureSavedNotice, setStructureSavedNotice] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Polling dedicado de Gate 2 por lessonId: ver comentario de
+  // GATE2_POLL_INTERVAL_MS/GATE2_POLL_TIMEOUT_MS arriba.
+  const gate2PollTimersRef = useRef<
+    Record<
+      string,
+      {
+        intervalId: ReturnType<typeof setInterval>;
+        timeoutId: ReturnType<typeof setTimeout>;
+      }
+    >
+  >({});
+
+  const stopGate2Polling = useCallback((lessonId: string) => {
+    const timers = gate2PollTimersRef.current[lessonId];
+    if (timers) {
+      clearInterval(timers.intervalId);
+      clearTimeout(timers.timeoutId);
+      delete gate2PollTimersRef.current[lessonId];
+    }
+  }, []);
+
+  useEffect(() => {
+    const timersRef = gate2PollTimersRef;
+    return () => {
+      Object.keys(timersRef.current).forEach((lessonId) => {
+        const timers = timersRef.current[lessonId];
+        clearInterval(timers.intervalId);
+        clearTimeout(timers.timeoutId);
+      });
+      timersRef.current = {};
+    };
+  }, []);
 
   const loadJob = useCallback(async () => {
     try {
@@ -796,8 +838,15 @@ export default function JobPage() {
 
   /**
    * Dispara el QA visual (Gate 2) de una clase ya ensamblada vía
-   * POST /api/jobs/<id>/gate2 {lessonId}. Refetchea el job al terminar (no
-   * usa el polling: el veredicto no cambia el status del job).
+   * POST /api/jobs/<id>/gate2 {lessonId}. El endpoint es fire-and-forget: el
+   * juez puede tardar hasta GATE2_TIMEOUT_MIN=20min corriendo en background,
+   * y el job se queda en un status estable ('assembled') que el polling
+   * general (startPolling) ya no recoge. Por eso, tras el POST, arrancamos
+   * un polling dedicado para esta lección (cada GATE2_POLL_INTERVAL_MS) que
+   * refetchea el job hasta que gate2Verdicts[lessonId] cambie respecto al
+   * valor que tenía justo al arrancar el polling, con un tope de
+   * GATE2_POLL_TIMEOUT_MS para no quedar corriendo indefinidamente si algo
+   * falla. Se limpia también al desmontar el componente.
    */
   const handleGate2 = useCallback(
     async (lessonId: string) => {
@@ -821,7 +870,25 @@ export default function JobPage() {
           }));
           return;
         }
-        await loadJob();
+        const body = await loadJob();
+        const previousVerdict = JSON.stringify(
+          body?.gate2Verdicts?.[lessonId] ?? null
+        );
+
+        stopGate2Polling(lessonId);
+        const intervalId = setInterval(async () => {
+          const nextBody = await loadJob();
+          const nextVerdict = JSON.stringify(
+            nextBody?.gate2Verdicts?.[lessonId] ?? null
+          );
+          if (nextVerdict !== previousVerdict) {
+            stopGate2Polling(lessonId);
+          }
+        }, GATE2_POLL_INTERVAL_MS);
+        const timeoutId = setTimeout(() => {
+          stopGate2Polling(lessonId);
+        }, GATE2_POLL_TIMEOUT_MS);
+        gate2PollTimersRef.current[lessonId] = { intervalId, timeoutId };
       } catch {
         setGate2Errors((prev) => ({
           ...prev,
@@ -831,7 +898,7 @@ export default function JobPage() {
         setGate2Loading(null);
       }
     },
-    [jobId, loadJob]
+    [jobId, loadJob, stopGate2Polling]
   );
 
   const handleToggleMaster = useCallback(async () => {
