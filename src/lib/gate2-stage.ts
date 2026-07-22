@@ -14,8 +14,13 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { runCommandViaClaudeCode } from "./plan/claude-code-engine";
-import { jobPath, gate2VerdictPath, readGate2Verdict } from "./jobs";
+import {
+  runCommandViaClaudeCode,
+  runCommandsInPool,
+  resolveModelForRole,
+} from "./plan/claude-code-engine";
+import { jobPath, gate2VerdictPath, readGate2Verdict, renderDir } from "./jobs";
+import { runGate2FramesStage } from "./gate2-frames-stage";
 
 /** Veredictos aceptados como válidos en `qa/gate2/<lessonId>.json`. */
 const VALID_VERDICTS = new Set(["APPROVED", "REJECTED"]);
@@ -87,4 +92,105 @@ async function verifyGate2Outputs(jobId: string, lessonId: string): Promise<void
       `La etapa Gate 2 (claude-code) terminó sin generar un veredicto válido en '${verdictPath}' para la lección '${lessonId}' del job '${jobId}'. El comando /gate2-clase no completó su trabajo.`,
     );
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * runGate2AllStage: Gate 2 de TODAS las clases renderizadas de un job,
+ * en paralelo (jueces) por pool de agentes.
+ * ------------------------------------------------------------------ */
+
+/** Resultado de Gate 2 para una lección dentro de `runGate2AllStage`. */
+export interface Gate2AllLessonResult {
+  lessonId: string;
+  verdict?: string;
+  error?: string;
+}
+
+/** Concurrencia del pool de jueces de Gate 2, vía GATE_CONCURRENCY (default 3). */
+function resolveGate2Concurrency(): number {
+  const concurrency = Number(process.env.GATE_CONCURRENCY ?? "3");
+  return Number.isFinite(concurrency) && concurrency > 0 ? Math.floor(concurrency) : 3;
+}
+
+/**
+ * Lista los lessonId que ya tienen `render/<lessonId>.mp4`, en el mismo
+ * orden en que `fs.readdir` los devuelve (no hay estructure.json disponible
+ * en este punto que dé un orden "canónico" más significativo).
+ */
+async function listRenderedLessonIds(jobId: string): Promise<string[]> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(renderDir(jobId));
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => path.extname(entry) === ".mp4")
+    .map((entry) => path.basename(entry, ".mp4"));
+}
+
+/**
+ * Corre Gate 2 sobre TODAS las clases renderizadas de un job: primero la
+ * etapa de frames (`runGate2FramesStage`) de cada lección EN SECUENCIA
+ * (ffmpeg local, rápido: no vale la pena paralelizar procesos de ffmpeg acá),
+ * y luego los jueces `/gate2-clase` de las lecciones cuyos frames se
+ * generaron bien, EN PARALELO vía `runCommandsInPool` (concurrency
+ * `GATE_CONCURRENCY`, default 3; modelo del rol `juez`).
+ *
+ * Una lección cuya etapa de frames falla no bloquea al resto: se reporta su
+ * error en el resumen y no se le corre el juez. Lo mismo si el juez falla o
+ * termina sin un veredicto válido en disco (ver `verifyGate2Outputs`).
+ */
+export async function runGate2AllStage(jobId: string): Promise<Gate2AllLessonResult[]> {
+  const lessonIds = await listRenderedLessonIds(jobId);
+  const resultsByLessonId = new Map<string, Gate2AllLessonResult>();
+
+  // 1) Frames, en secuencia (ffmpeg local, rápido: correrlo en paralelo no
+  // aporta y sí compite por I/O/CPU sin necesidad).
+  for (const lessonId of lessonIds) {
+    try {
+      await runGate2FramesStage(jobId, lessonId);
+    } catch (err) {
+      resultsByLessonId.set(lessonId, {
+        lessonId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // 2) Jueces /gate2-clase, en paralelo (pool), solo para las lecciones cuyos
+  // frames se extrajeron bien.
+  const pendingLessonIds = lessonIds.filter((lessonId) => !resultsByLessonId.has(lessonId));
+  const poolResults = await runCommandsInPool(
+    pendingLessonIds.map((lessonId) => ({
+      command: "gate2-clase",
+      args: `${jobId} ${lessonId}`,
+      timeoutMin: resolveGate2TimeoutMin(),
+      model: resolveModelForRole("juez"),
+    })),
+    resolveGate2Concurrency(),
+  );
+
+  for (let i = 0; i < pendingLessonIds.length; i += 1) {
+    const lessonId = pendingLessonIds[i];
+    const poolResult = poolResults[i];
+
+    if (!poolResult.ok) {
+      resultsByLessonId.set(lessonId, { lessonId, error: poolResult.error });
+      continue;
+    }
+
+    try {
+      await verifyGate2Outputs(jobId, lessonId);
+      const verdict = (await readGate2Verdict(jobId, lessonId)) as { verdict?: string } | null;
+      resultsByLessonId.set(lessonId, { lessonId, verdict: verdict?.verdict });
+    } catch (err) {
+      resultsByLessonId.set(lessonId, {
+        lessonId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return lessonIds.map((lessonId) => resultsByLessonId.get(lessonId)!);
 }
