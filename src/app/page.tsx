@@ -1,7 +1,15 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+
+interface JobSummary {
+  id: string;
+  name: string;
+  status: string;
+  createdAt: string;
+}
 
 // Formatea bytes como GB (con 2 decimales) si el total supera 1GB, o MB si no
 // — para que la barra de progreso muestre una unidad legible según el tamaño
@@ -27,6 +35,24 @@ export default function HomePage() {
   const [phase, setPhase] = useState<'idle' | 'uploading' | 'processing'>(
     'idle'
   );
+
+  // Jobs existentes, para navegar a ellos sin tener que saber la URL de
+  // antemano. Se cargan una sola vez al montar la página.
+  const [jobs, setJobs] = useState<JobSummary[]>([]);
+  const [jobsError, setJobsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('/api/jobs')
+      .then((res) => res.json())
+      .then((data: { jobs?: JobSummary[]; error?: string }) => {
+        if (data.jobs) {
+          setJobs(data.jobs);
+        } else {
+          setJobsError(data.error ?? 'No se pudieron cargar los proyectos.');
+        }
+      })
+      .catch(() => setJobsError('No se pudieron cargar los proyectos.'));
+  }, []);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -154,6 +180,26 @@ export default function HomePage() {
           {loading ? 'Procesando…' : 'Procesar'}
         </button>
       </form>
+
+      <section className="jobs-list">
+        <h2>Proyectos</h2>
+        {jobsError && <div className="error-banner">{jobsError}</div>}
+        {!jobsError && jobs.length === 0 && (
+          <p>Todavía no hay proyectos. Subí un ZIP para crear el primero.</p>
+        )}
+        {jobs.length > 0 && (
+          <ul>
+            {jobs.map((job) => (
+              <li key={job.id}>
+                <Link href={'/jobs/' + job.id}>
+                  {job.name} — {job.status} —{' '}
+                  {new Date(job.createdAt).toLocaleString()}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </main>
   );
 }
