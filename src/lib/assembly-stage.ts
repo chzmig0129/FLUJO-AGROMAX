@@ -78,12 +78,16 @@ async function canSkip(
  *
  * @param force si es true, ignora los sidecars y re-renderiza todas las
  *   clases (incluyendo los intros).
+ * @param lessonId si se pasa, acota el ensamblaje a esa única lección (el
+ *   resto de las clases del job no se tocan). Lanza un error claro si la
+ *   lección no aparece entre las planificadas por buildAssemblyPlans.
  */
 export async function runAssemblyStage(
   jobId: string,
-  options?: { force?: boolean }
+  options?: { force?: boolean; lessonId?: string }
 ): Promise<void> {
   const force = options?.force ?? false;
+  const lessonId = options?.lessonId;
   const backend = getAssemblyBackend();
 
   const availability = await backend.isAvailable();
@@ -95,7 +99,19 @@ export async function runAssemblyStage(
 
   // El planner falla temprano y con mensaje claro si falta cualquier
   // prerequisito (structure.json, cuts, proxies).
-  const planned: PlannedLesson[] = await buildAssemblyPlans(jobId);
+  const allPlanned: PlannedLesson[] = await buildAssemblyPlans(jobId);
+
+  // Si se pidió acotar a una lección, se filtra el plan a esa única clase;
+  // el resto del pipeline (progreso, sidecars, etc.) queda sin tocar.
+  let planned: PlannedLesson[] = allPlanned;
+  if (lessonId !== undefined) {
+    planned = allPlanned.filter((lesson) => lesson.lessonId === lessonId);
+    if (planned.length === 0) {
+      throw new Error(
+        `No se puede ensamblar: la lección "${lessonId}" no está entre las lecciones planificadas del job "${jobId}"`
+      );
+    }
+  }
 
   await fs.mkdir(introsDir(jobId), { recursive: true });
   await fs.mkdir(renderDir(jobId), { recursive: true });

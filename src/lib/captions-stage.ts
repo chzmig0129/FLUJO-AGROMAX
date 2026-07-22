@@ -262,9 +262,19 @@ function groupIntoCaptions(words: MappedWord[]): Caption[] {
  *
  * Idempotente: sobrescribe por completo cada archivo de plan/captions/ en
  * cada corrida.
+ *
+ * @param lessonId si se pasa, acota la generación de captions a esa única
+ *   lección (el resto de los archivos de plan/captions/ no se tocan).
  */
-export async function runCaptionsStage(jobId: string): Promise<void> {
-  const cutsFiles = await readCutsFiles(jobId);
+export async function runCaptionsStage(
+  jobId: string,
+  lessonId?: string
+): Promise<void> {
+  const allCutsFiles = await readCutsFiles(jobId);
+  const cutsFiles =
+    lessonId !== undefined
+      ? allCutsFiles.filter((cutsFile) => cutsFile.lessonId === lessonId)
+      : allCutsFiles;
 
   const transcriptCache = new Map<string, TranscriptResult | null>();
   async function getTranscript(clip: string): Promise<TranscriptResult | null> {

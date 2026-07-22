@@ -55,20 +55,26 @@ export async function POST(
     );
   }
 
-  // El body es opcional: un POST sin cuerpo equivale a { force: false }.
+  // El body es opcional: un POST sin cuerpo equivale a { force: false } y sin
+  // lessonId (ensambla todas las clases).
   let force = false;
+  let lessonId: string | undefined;
   try {
-    const body = (await request.json()) as { force?: boolean } | null;
+    const body = (await request.json()) as
+      | { force?: boolean; lessonId?: string }
+      | null;
     force = Boolean(body?.force);
+    lessonId = body?.lessonId;
   } catch {
     force = false;
+    lessonId = undefined;
   }
 
   if (!ASSEMBLY_READY_STATUSES.includes(job.status)) {
     // Un job en 'error' puede reintentar solo el ensamblaje si los cortes ya
     // están en disco: la falla fue en (o después de) esta etapa.
     if (job.status === "error" && (await hasAssemblyPrerequisites(jobId))) {
-      runAssembleOnly(jobId, { force }).catch(console.error);
+      runAssembleOnly(jobId, { force, lessonId }).catch(console.error);
       return NextResponse.json({ ok: true });
     }
 
@@ -80,7 +86,7 @@ export async function POST(
     return NextResponse.json({ error: message }, { status: 400 });
   }
 
-  runAssembleOnly(jobId, { force }).catch(console.error);
+  runAssembleOnly(jobId, { force, lessonId }).catch(console.error);
 
   return NextResponse.json({ ok: true });
 }

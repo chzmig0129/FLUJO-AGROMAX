@@ -356,8 +356,14 @@ function buildUncutCutsClip(
  * actual, pero eso es aceptable: readCutsFiles es tolerante y una
  * re-planificación completa del curso ya invalidaría todo el prep de todos
  * modos).
+ *
+ * @param lessonId si se pasa, acota el cálculo de cortes a esa única lección
+ *   (el resto de las lecciones del job no se tocan ni se re-escriben).
  */
-export async function runCutsStage(jobId: string): Promise<void> {
+export async function runCutsStage(
+  jobId: string,
+  lessonId?: string
+): Promise<void> {
   const structure = await readStructureJson(jobId);
   if (!structure) {
     throw new Error(
@@ -388,6 +394,8 @@ export async function runCutsStage(jobId: string): Promise<void> {
 
   for (const mod of structure.modules) {
     for (const lesson of mod.lessons) {
+      if (lessonId !== undefined && lesson.id !== lessonId) continue;
+
       const kind = lesson.kind ?? "normal";
       const clips: CutsClip[] = [];
 

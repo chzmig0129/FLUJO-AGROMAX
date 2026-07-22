@@ -71,15 +71,15 @@ export async function POST(
   }
 
   // El body es opcional y tolerante: si falta o no es JSON válido, se trata
-  // como {} (equivalente a no pasar force:true).
-  let body: { force?: boolean } = {};
+  // como {} (equivalente a no pasar force:true ni lessonId).
+  let body: { force?: boolean; lessonId?: string } = {};
   try {
     const parsed = await request.json();
     if (typeof parsed === "object" && parsed !== null) {
-      body = parsed as { force?: boolean };
+      body = parsed as { force?: boolean; lessonId?: string };
     }
   } catch {
-    // Body ausente o inválido: se mantiene {} (sin force).
+    // Body ausente o inválido: se mantiene {} (sin force ni lessonId).
   }
 
   if (body.force !== true) {
@@ -100,7 +100,9 @@ export async function POST(
       // El job falló en (o después de) la preparación, pero ya tiene el
       // prerequisito real (plan/structure.json): se puede reintentar solo
       // la preparación sin re-planear.
-      runPrepOnly(jobId).catch(console.error);
+      runPrepOnly(jobId, { force: body.force, lessonId: body.lessonId }).catch(
+        console.error
+      );
       return NextResponse.json({ ok: true });
     }
 
@@ -113,7 +115,9 @@ export async function POST(
   }
 
   // Fire-and-forget: no se espera a que termine la preparación para responder.
-  runPrepOnly(jobId).catch(console.error);
+  runPrepOnly(jobId, { force: body.force, lessonId: body.lessonId }).catch(
+    console.error
+  );
 
   return NextResponse.json({ ok: true });
 }

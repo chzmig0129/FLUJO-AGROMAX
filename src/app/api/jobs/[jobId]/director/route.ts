@@ -7,15 +7,15 @@
  *
  * Fire-and-forget, mismo patrón que `/api/jobs/[jobId]/gate2` y `/gate3`:
  * valida que el job exista (404 si no) y que haya al menos algún veredicto
- * de QA ya escrito en disco (`qa/gate1.json` o `qa/gate2/` con al menos un
- * archivo) — sin eso no hay nada que el director pueda dirigir (400 si
- * ninguno existe). Dispara `runDirectorStage` sin esperar a que termine, y
- * responde de inmediato.
+ * de QA ya escrito en disco (`qa/gate1.json`, `qa/gate2/<lessonId>.json`,
+ * `qa/gate3/<moduleId>.json` o `plan/captions-audit.json`) — sin eso no hay
+ * nada que el director pueda dirigir (400 si ninguno existe). Dispara
+ * `runDirectorStage` sin esperar a que termine, y responde de inmediato.
  */
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { NextResponse } from "next/server";
-import { readJobJson, qaDir } from "@/lib/jobs";
+import { readJobJson, qaDir, planDir } from "@/lib/jobs";
 import { runDirectorStage } from "@/lib/director-stage";
 
 export const runtime = "nodejs";
@@ -41,6 +41,27 @@ async function hasGate2Verdicts(jobId: string): Promise<boolean> {
   return entries.some((entry) => entry.endsWith(".json"));
 }
 
+/** Verifica (tolerante) si `qa/gate3/` existe y tiene al menos un archivo `.json`. */
+async function hasGate3Verdicts(jobId: string): Promise<boolean> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(path.join(qaDir(jobId), "gate3"));
+  } catch {
+    return false;
+  }
+  return entries.some((entry) => entry.endsWith(".json"));
+}
+
+/** Verifica (tolerante) si `plan/captions-audit.json` existe. */
+async function hasCaptionsAuditVerdict(jobId: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(planDir(jobId), "captions-audit.json"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ jobId: string }> }
@@ -56,16 +77,18 @@ export async function POST(
     );
   }
 
-  const [gate1Ok, gate2Ok] = await Promise.all([
+  const [gate1Ok, gate2Ok, gate3Ok, captionsAuditOk] = await Promise.all([
     hasGate1Verdict(jobId),
     hasGate2Verdicts(jobId),
+    hasGate3Verdicts(jobId),
+    hasCaptionsAuditVerdict(jobId),
   ]);
 
-  if (!gate1Ok && !gate2Ok) {
+  if (!gate1Ok && !gate2Ok && !gate3Ok && !captionsAuditOk) {
     return NextResponse.json(
       {
         error:
-          "No se puede correr el director de edición: el proyecto todavía no tiene ningún veredicto de QA ('qa/gate1.json' ni 'qa/gate2/<lessonId>.json') que dirigir (falta correr al menos un gate primero).",
+          "No se puede correr el director de edición: el proyecto todavía no tiene ningún veredicto de QA ('qa/gate1.json', 'qa/gate2/<lessonId>.json', 'qa/gate3/<moduleId>.json' ni 'plan/captions-audit.json') que dirigir (falta correr al menos un gate primero).",
       },
       { status: 400 }
     );

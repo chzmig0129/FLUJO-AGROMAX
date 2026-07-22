@@ -158,13 +158,16 @@ async function executePipeline(jobId: string): Promise<void> {
  * escritura concurrente sobre prep-progress.json aunque las dos etapas
  * corran en paralelo: silencio no toca ese archivo en absoluto.
  */
-async function runPrepStages(jobId: string): Promise<void> {
+async function runPrepStages(jobId: string, lessonId?: string): Promise<void> {
   await updateJobStatus(jobId, "preparing", {
     stages: {
       silence: { startedAt: new Date().toISOString() },
       proxies: { startedAt: new Date().toISOString() },
     },
   });
+  // Silencio y proxies son por-clip y cacheados (saltan lo ya generado), así
+  // que corren sin acotar por lección aunque se pida un lessonId: acotarlos
+  // no ahorraría trabajo real y complicaría la firma sin necesidad.
   await Promise.all([runSilenceStage(jobId), runProxyStage(jobId)]);
   const prepFinishedAt = new Date().toISOString();
   await updateJobStatus(jobId, "preparing", {
@@ -177,7 +180,7 @@ async function runPrepStages(jobId: string): Promise<void> {
   await updateJobStatus(jobId, "preparing", {
     stages: { cuts: { startedAt: new Date().toISOString() } },
   });
-  await runCutsStage(jobId);
+  await runCutsStage(jobId, lessonId);
   await updateJobStatus(jobId, "preparing", {
     stages: { cuts: { finishedAt: new Date().toISOString() } },
   });
@@ -188,7 +191,7 @@ async function runPrepStages(jobId: string): Promise<void> {
   await updateJobStatus(jobId, "preparing", {
     stages: { captions: { startedAt: new Date().toISOString() } },
   });
-  await runCaptionsStage(jobId);
+  await runCaptionsStage(jobId, lessonId);
   await updateJobStatus(jobId, "prepared", {
     stages: { captions: { finishedAt: new Date().toISOString() } },
   });
@@ -370,6 +373,34 @@ async function hasPrepPrerequisites(jobId: string): Promise<boolean> {
 }
 
 /**
+ * Valida (lanzando un error claro si no) que `lessonId` exista entre las
+ * lecciones de plan/structure.json del job. Usada por runPrepOnly cuando se
+ * pide acotar a una sola clase: a diferencia de runAssemblyStage (que ya
+ * falla si la lección no está entre las planificadas), runCutsStage y
+ * runCaptionsStage simplemente no producen nada para un lessonId inexistente
+ * en vez de lanzar, así que esta validación vive acá.
+ */
+async function validateLessonExists(
+  jobId: string,
+  lessonId: string
+): Promise<void> {
+  const structure = await readStructureJson(jobId);
+  if (!structure) {
+    throw new Error(
+      `No hay plan/structure.json para el job "${jobId}": corre la etapa de plan antes de acotar por lección`
+    );
+  }
+  const exists = structure.modules.some((mod) =>
+    mod.lessons.some((lesson) => lesson.id === lessonId)
+  );
+  if (!exists) {
+    throw new Error(
+      `La lección "${lessonId}" no existe en plan/structure.json del job "${jobId}"`
+    );
+  }
+}
+
+/**
  * Corre solo las etapas de preparación (5A silencio, 5B proxies, 5C cortes)
  * para un job ya planeado (permite re-preparar sin volver a correr
  * probe/transcribe/frames/plan). Reutiliza el mismo registro `running` que
@@ -383,13 +414,16 @@ async function hasPrepPrerequisites(jobId: string): Promise<boolean> {
  * prerequisito, la falla ocurrió antes de la preparación y hace falta
  * reintentar el pipeline completo (o al menos el plan).
  */
-export function runPrepOnly(jobId: string): Promise<void> {
+export function runPrepOnly(
+  jobId: string,
+  options?: { force?: boolean; lessonId?: string }
+): Promise<void> {
   const existing = running.get(jobId);
   if (existing) {
     return existing;
   }
 
-  const promise = executePrepOnly(jobId).finally(() => {
+  const promise = executePrepOnly(jobId, options).finally(() => {
     running.delete(jobId);
   });
 
@@ -397,8 +431,20 @@ export function runPrepOnly(jobId: string): Promise<void> {
   return promise;
 }
 
-/** Ejecuta únicamente las etapas de preparación, validando el status previo del job. */
-async function executePrepOnly(jobId: string): Promise<void> {
+/**
+ * Ejecuta únicamente las etapas de preparación, validando el status previo
+ * del job. Si `options.lessonId` se pasa, valida que la lección exista en
+ * plan/structure.json y acota las etapas de cortes y captions a esa única
+ * clase (silencio y proxies siguen corriendo sobre todos los clips: son
+ * por-clip y cacheados, así que no hay trabajo de más real que ahorrar).
+ * `options.force` no cambia el comportamiento de estas etapas (deterministas
+ * y siempre re-escriben su salida); se acepta solo por simetría con
+ * runAssembleOnly.
+ */
+async function executePrepOnly(
+  jobId: string,
+  options?: { force?: boolean; lessonId?: string }
+): Promise<void> {
   try {
     const current = await readJobJson(jobId);
     const readyByStatus = PREP_READY_STATUSES.includes(current.status);
@@ -416,10 +462,14 @@ async function executePrepOnly(jobId: string): Promise<void> {
       );
     }
 
+    if (options?.lessonId !== undefined) {
+      await validateLessonExists(jobId, options.lessonId);
+    }
+
     // Si veníamos de un 'error' anterior con prerequisitos válidos,
     // updateJobStatus limpia errorMessage automáticamente porque el nuevo
     // status ('preparing') no es 'error'.
-    await runPrepStages(jobId);
+    await runPrepStages(jobId, options?.lessonId);
   } catch (err) {
     const errorMessage =
       err instanceof Error
@@ -457,7 +507,7 @@ export async function hasAssemblyPrerequisites(
  */
 export function runAssembleOnly(
   jobId: string,
-  options?: { force?: boolean }
+  options?: { force?: boolean; lessonId?: string }
 ): Promise<void> {
   const existing = running.get(jobId);
   if (existing) {
@@ -479,10 +529,17 @@ const ASSEMBLY_READY_STATUSES: JobStatus[] = [
   "assembled",
 ];
 
-/** Ejecuta el ensamblaje validando el status previo del job. */
+/**
+ * Ejecuta el ensamblaje validando el status previo del job. Si
+ * `options.lessonId` se pasa, valida que la lección exista en
+ * plan/structure.json antes de arrancar (runAssemblyStage también valida,
+ * contra el plan de assembly, pero esta validación temprana contra la
+ * estructura da un mensaje claro incluso si buildAssemblyPlans fallara antes
+ * por otra razón).
+ */
 async function executeAssembleOnly(
   jobId: string,
-  options?: { force?: boolean }
+  options?: { force?: boolean; lessonId?: string }
 ): Promise<void> {
   try {
     const current = await readJobJson(jobId);
@@ -494,6 +551,10 @@ async function executeAssembleOnly(
       throw new Error(
         `No se puede ensamblar: el job "${jobId}" debe estar preparado primero (status actual: "${current.status}")`
       );
+    }
+
+    if (options?.lessonId !== undefined) {
+      await validateLessonExists(jobId, options.lessonId);
     }
 
     await runAssemblyStage(jobId, options);
