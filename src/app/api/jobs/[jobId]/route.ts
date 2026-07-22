@@ -2,10 +2,11 @@
  * GET /api/jobs/[jobId] — devuelve la metadata del job (job.json), más el
  * progreso de transcripción, la metadata de probe, el resumen final, el
  * manifest de frames, los artefactos de la etapa de plan (structure, audit,
- * verdicts y decisiones.md) y los artefactos de las etapas de preparación
- * (5A/5B/5C: silence, cuts y prepProgress) y de las etapas 9/11 (intros y
- * ensamblaje: assemblyProgress y los sidecars de render) si ya existen, para
- * que la UI pueda pollear un único endpoint.
+ * verdicts, decisiones.md y approval — el gate de aprobación humana de la
+ * etapa 6) y los artefactos de las etapas de preparación (5A/5B/5C: silence,
+ * cuts y prepProgress) y de las etapas 9/11 (intros y ensamblaje:
+ * assemblyProgress y los sidecars de render) si ya existen, para que la UI
+ * pueda pollear un único endpoint.
  *
  * Nota: esta ruta es solo lectura. Nunca toca jobs/<id>/source/, que es
  * inmutable una vez creada la ingesta (ver invariante en src/lib/jobs.ts).
@@ -14,6 +15,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import {
+  readApprovalJson,
   readAssemblyProgressJson,
   readAuditJson,
   readCutsFiles,
@@ -67,6 +69,7 @@ export async function GET(
       audit,
       verdicts,
       decisiones,
+      approval,
       silence,
       cuts,
       prepProgress,
@@ -84,6 +87,9 @@ export async function GET(
       readAuditJson(jobId),
       readVerdictsJson(jobId),
       readDecisionesMd(jobId),
+      // Gate de aprobación humana (etapa 6): null si la estructura aún no
+      // fue aprobada (o si una edición posterior invalidó la aprobación).
+      readApprovalJson(jobId),
       // Artefactos de las etapas de preparación (5A/5B/5C): lecturas
       // tolerantes, devuelven null/[] si el job todavía no llegó a esa
       // etapa. readCutsFiles ya devuelve [] tolerante, así que se normaliza
@@ -110,6 +116,7 @@ export async function GET(
       audit,
       verdicts,
       decisiones,
+      approval,
       silence,
       cuts: cuts.length > 0 ? cuts : null,
       prepProgress,

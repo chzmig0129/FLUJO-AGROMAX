@@ -77,6 +77,8 @@ interface JobApiResponse {
   summary: SummaryJson | null;
   manifest: FramesManifest | null;
   structure: StructureJson | null;
+  /** Gate humano de la etapa 6: null mientras la estructura no fue aprobada. */
+  approval: { approvedAt: string } | null;
   audit: AuditJson | null;
   verdicts: Verdict[] | null;
   decisiones: string | null;
@@ -259,6 +261,23 @@ export default function JobPage() {
   const [masterText, setMasterText] = useState<string | null>(null);
   const [masterLoading, setMasterLoading] = useState(false);
   const [masterError, setMasterError] = useState<string | null>(null);
+
+  // Gate humano de la etapa 6: aprobar/editar la estructura antes de preparar.
+  const [approving, setApproving] = useState(false);
+  const [approveError, setApproveError] = useState<string | null>(null);
+  const [editingStructure, setEditingStructure] = useState(false);
+  const [editStructure, setEditStructure] = useState<StructureJson | null>(
+    null
+  );
+  const [structureJsonText, setStructureJsonText] = useState("");
+  const [structureJsonError, setStructureJsonError] = useState<string | null>(
+    null
+  );
+  const [savingStructure, setSavingStructure] = useState(false);
+  const [saveStructureError, setSaveStructureError] = useState<string | null>(
+    null
+  );
+  const [structureSavedNotice, setStructureSavedNotice] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -443,41 +462,266 @@ export default function JobPage() {
   }, [jobId, startPolling]);
 
   /**
-   * Dispara (o re-dispara) las etapas deterministas de preparación (5A
-   * silencio, 5B proxies, 5C cortes) vía POST /api/jobs/<id>/prep. Maneja
-   * 409 (pipeline ya corriendo) y 400 (status del job no permite preparar
-   * todavía) con mensajes específicos.
+   * Aprueba la estructura (gate humano de la etapa 6) vía
+   * POST /api/jobs/<id>/approve. Refetchea el job para reflejar approval.
    */
-  const handlePrep = useCallback(async () => {
-    setPrepError(null);
-    setPreparing(true);
+  const handleApprove = useCallback(async () => {
+    setApproveError(null);
+    setApproving(true);
     try {
-      const res = await fetch(`/api/jobs/${jobId}/prep`, {
+      const res = await fetch(`/api/jobs/${jobId}/approve`, {
         method: "POST",
       });
-      if (res.status === 409) {
-        setPrepError("El proyecto ya se está procesando.");
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setApproveError(body?.error ?? "No se pudo aprobar la estructura.");
         return;
       }
-      if (res.status === 400) {
+      await loadJob();
+    } catch {
+      setApproveError("No se pudo aprobar la estructura.");
+    } finally {
+      setApproving(false);
+    }
+  }, [jobId, loadJob]);
+
+  /** Entra en modo edición: clona la estructura actual como working copy. */
+  const handleStartEdit = useCallback((structure: StructureJson) => {
+    const clone: StructureJson = JSON.parse(JSON.stringify(structure));
+    setEditStructure(clone);
+    setStructureJsonText(JSON.stringify(clone, null, 2));
+    setStructureJsonError(null);
+    setSaveStructureError(null);
+    setStructureSavedNotice(false);
+    setEditingStructure(true);
+  }, []);
+
+  /** Sale del modo edición sin guardar; descarta la working copy. */
+  const handleCancelEdit = useCallback(() => {
+    setEditingStructure(false);
+    setEditStructure(null);
+    setStructureJsonText("");
+    setStructureJsonError(null);
+    setSaveStructureError(null);
+  }, []);
+
+  /** Actualiza el título de un módulo en la working copy. */
+  const handleModuleTitleChange = useCallback(
+    (moduleId: string, title: string) => {
+      setEditStructure((prev) => {
+        if (!prev) return prev;
+        const next: StructureJson = {
+          ...prev,
+          modules: prev.modules.map((m) =>
+            m.id === moduleId ? { ...m, title } : m
+          ),
+        };
+        setStructureJsonText(JSON.stringify(next, null, 2));
+        return next;
+      });
+    },
+    []
+  );
+
+  /** Actualiza el título de una lección en la working copy. */
+  const handleLessonTitleChange = useCallback(
+    (moduleId: string, lessonId: string, title: string) => {
+      setEditStructure((prev) => {
+        if (!prev) return prev;
+        const next: StructureJson = {
+          ...prev,
+          modules: prev.modules.map((m) =>
+            m.id !== moduleId
+              ? m
+              : {
+                  ...m,
+                  lessons: m.lessons.map((l) =>
+                    l.id === lessonId ? { ...l, title } : l
+                  ),
+                }
+          ),
+        };
+        setStructureJsonText(JSON.stringify(next, null, 2));
+        return next;
+      });
+    },
+    []
+  );
+
+  /**
+   * Mueve una lección un lugar hacia arriba/abajo dentro de su módulo,
+   * intercambiando el campo `order` con el vecino adyacente (según el orden
+   * de despliegue actual).
+   */
+  const handleReorderLesson = useCallback(
+    (moduleId: string, lessonId: string, direction: -1 | 1) => {
+      setEditStructure((prev) => {
+        if (!prev) return prev;
+        const next: StructureJson = {
+          ...prev,
+          modules: prev.modules.map((m) => {
+            if (m.id !== moduleId) return m;
+            const sorted = m.lessons.slice().sort((a, b) => a.order - b.order);
+            const idx = sorted.findIndex((l) => l.id === lessonId);
+            const targetIdx = idx + direction;
+            if (idx === -1 || targetIdx < 0 || targetIdx >= sorted.length) {
+              return m;
+            }
+            const a = sorted[idx];
+            const b = sorted[targetIdx];
+            const aOrder = a.order;
+            const bOrder = b.order;
+            return {
+              ...m,
+              lessons: m.lessons.map((l) => {
+                if (l.id === a.id) return { ...l, order: bOrder };
+                if (l.id === b.id) return { ...l, order: aOrder };
+                return l;
+              }),
+            };
+          }),
+        };
+        setStructureJsonText(JSON.stringify(next, null, 2));
+        return next;
+      });
+    },
+    []
+  );
+
+  /** Mueve una lección de un módulo a otro (select), al final del destino. */
+  const handleMoveLessonToModule = useCallback(
+    (fromModuleId: string, lessonId: string, toModuleId: string) => {
+      if (fromModuleId === toModuleId) return;
+      setEditStructure((prev) => {
+        if (!prev) return prev;
+        const fromModule = prev.modules.find((m) => m.id === fromModuleId);
+        const lesson = fromModule?.lessons.find((l) => l.id === lessonId);
+        if (!fromModule || !lesson) return prev;
+        const next: StructureJson = {
+          ...prev,
+          modules: prev.modules.map((m) => {
+            if (m.id === fromModuleId) {
+              return {
+                ...m,
+                lessons: m.lessons.filter((l) => l.id !== lessonId),
+              };
+            }
+            if (m.id === toModuleId) {
+              const maxOrder = m.lessons.reduce(
+                (max, l) => Math.max(max, l.order),
+                -1
+              );
+              return {
+                ...m,
+                lessons: [...m.lessons, { ...lesson, order: maxOrder + 1 }],
+              };
+            }
+            return m;
+          }),
+        };
+        setStructureJsonText(JSON.stringify(next, null, 2));
+        return next;
+      });
+    },
+    []
+  );
+
+  /** Aplica el JSON crudo del textarea como nueva working copy. */
+  const handleApplyStructureJson = useCallback(() => {
+    try {
+      const parsed = JSON.parse(structureJsonText) as StructureJson;
+      setEditStructure(parsed);
+      setStructureJsonError(null);
+    } catch {
+      setStructureJsonError("JSON inválido: revisá la sintaxis.");
+    }
+  }, [structureJsonText]);
+
+  /**
+   * Guarda la working copy vía PUT /api/jobs/<id>/structure. Al guardar, la
+   * aprobación previa queda invalidada (approval vuelve a null en el
+   * servidor); se avisa acá con structureSavedNotice.
+   */
+  const handleSaveStructure = useCallback(async () => {
+    if (!editStructure) return;
+    setStructureJsonError(null);
+    setSaveStructureError(null);
+    setSavingStructure(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/structure`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ structure: editStructure }),
+      });
+      if (!res.ok) {
         const body = await res.json().catch(() => null);
-        setPrepError(
-          body?.error ?? "El proyecto todavía no puede prepararse."
+        setSaveStructureError(
+          body?.error ?? "No se pudo guardar la estructura."
         );
         return;
       }
-      if (!res.ok) {
-        setPrepError("No se pudo iniciar la preparación del corte.");
-        return;
-      }
-      // Reanuda el polling de inmediato para reflejar el nuevo status.
-      startPolling();
+      setEditingStructure(false);
+      setEditStructure(null);
+      setStructureJsonText("");
+      setStructureSavedNotice(true);
+      await loadJob();
     } catch {
-      setPrepError("No se pudo iniciar la preparación del corte.");
+      setSaveStructureError("No se pudo guardar la estructura.");
     } finally {
-      setPreparing(false);
+      setSavingStructure(false);
     }
-  }, [jobId, startPolling]);
+  }, [editStructure, jobId, loadJob]);
+
+  /**
+   * Dispara (o re-dispara) las etapas deterministas de preparación (5A
+   * silencio, 5B proxies, 5C cortes) vía POST /api/jobs/<id>/prep. Maneja
+   * 409 (pipeline ya corriendo O estructura no aprobada — el body {force}
+   * salta la validación de aprobación) y 400 (status del job no permite
+   * preparar todavía) con mensajes específicos.
+   */
+  const handlePrep = useCallback(
+    async (force = false) => {
+      setPrepError(null);
+      setPreparing(true);
+      try {
+        const res = await fetch(`/api/jobs/${jobId}/prep`, {
+          method: "POST",
+          ...(force
+            ? {
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ force: true }),
+              }
+            : {}),
+        });
+        if (res.status === 409) {
+          const body = await res.json().catch(() => null);
+          setPrepError(
+            body?.error ??
+              "El proyecto ya se está procesando o la estructura no está aprobada."
+          );
+          return;
+        }
+        if (res.status === 400) {
+          const body = await res.json().catch(() => null);
+          setPrepError(
+            body?.error ?? "El proyecto todavía no puede prepararse."
+          );
+          return;
+        }
+        if (!res.ok) {
+          setPrepError("No se pudo iniciar la preparación del corte.");
+          return;
+        }
+        // Reanuda el polling de inmediato para reflejar el nuevo status.
+        startPolling();
+      } catch {
+        setPrepError("No se pudo iniciar la preparación del corte.");
+      } finally {
+        setPreparing(false);
+      }
+    },
+    [jobId, startPolling]
+  );
 
   /**
    * Dispara (o re-dispara) las etapas 9 y 11 (intros + ensamblaje headless)
@@ -568,6 +812,7 @@ export default function JobPage() {
     summary,
     manifest,
     structure,
+    approval,
     audit,
     decisiones,
     silence,
@@ -694,7 +939,7 @@ export default function JobPage() {
               <button
                 className="btn btn-secondary"
                 type="button"
-                onClick={handlePrep}
+                onClick={() => handlePrep()}
                 disabled={preparing}
               >
                 {preparing ? "Reintentando preparación…" : "Reintentar preparación"}
@@ -852,7 +1097,7 @@ export default function JobPage() {
               <button
                 className="btn btn-secondary"
                 type="button"
-                onClick={handlePrep}
+                onClick={() => handlePrep()}
                 disabled={preparing}
               >
                 {preparing
@@ -860,6 +1105,24 @@ export default function JobPage() {
                   : canReprep
                     ? "Re-preparar corte"
                     : "Preparar corte (silencio + proxies + cortes)"}
+              </button>
+            )}
+            {(canPrep || canReprep) && approval === null && (
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "La estructura todavía no fue aprobada. ¿Preparar el corte de todos modos?"
+                    )
+                  ) {
+                    handlePrep(true);
+                  }
+                }}
+                disabled={preparing}
+              >
+                Preparar sin aprobar
               </button>
             )}
             {canAssemble && (
@@ -941,60 +1204,285 @@ export default function JobPage() {
             <section className="audit-section">
               <h2>Auditoría de la estructura (agente)</h2>
               <p className="audit-hint">
-                Vista solo lectura de lo que decidió el agente autónomo de la
-                etapa 4. No hay controles de aprobar ni bloquear: la etapa
-                corre sin humano en el loop, esto es solo para auditar
-                después.
+                Vista de lo que decidió el agente autónomo de la etapa 4.
+                Aprobá la estructura antes de preparar el corte, o editala
+                si hace falta ajustar módulos, clases o su orden.
               </p>
 
-              <h3>{structure.courseTitle}</h3>
-              <div className="structure-tree">
-                {structure.modules
-                  .slice()
-                  .sort((a, b) => a.order - b.order)
-                  .map((mod) => (
-                    <div className="structure-module" key={mod.id}>
-                      <h4>{mod.title}</h4>
-                      {mod.topics.length > 0 && (
-                        <p className="structure-module-topics">
-                          {mod.topics.join(" · ")}
-                        </p>
-                      )}
-                      <ul className="structure-lesson-list">
-                        {mod.lessons
-                          .slice()
-                          .sort((a, b) => a.order - b.order)
-                          .map((lesson) => (
-                            <li
-                              className="structure-lesson"
-                              key={lesson.id}
-                            >
-                              <span className="structure-lesson-title">
-                                {lesson.title}
-                              </span>
-                              <ul className="structure-segment-list">
-                                {lesson.segments.map((seg, idx) => (
-                                  <li
-                                    className="structure-segment"
-                                    key={`${seg.clip}-${idx}`}
-                                  >
-                                    <span className="badge">{seg.clip}</span>{" "}
-                                    <span className="structure-segment-range">
-                                      {formatTimestamp(seg.startSeconds)}–
-                                      {formatTimestamp(seg.endSeconds)}
-                                    </span>{" "}
-                                    <span className="structure-segment-topic">
-                                      {seg.topic}
-                                    </span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </li>
-                          ))}
-                      </ul>
-                    </div>
-                  ))}
+              <div className="stepper-actions">
+                <span className="badge">
+                  {approval
+                    ? `Estructura aprobada ${new Date(
+                        approval.approvedAt
+                      ).toLocaleString()}`
+                    : "Pendiente de aprobación"}
+                </span>
+                {approval === null && (
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    onClick={handleApprove}
+                    disabled={approving}
+                  >
+                    {approving ? "Aprobando…" : "Aprobar estructura"}
+                  </button>
+                )}
+                {!editingStructure && (
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    onClick={() => handleStartEdit(structure)}
+                  >
+                    Editar
+                  </button>
+                )}
               </div>
+              {approveError && (
+                <p className="stepper-error-msg">{approveError}</p>
+              )}
+              {structureSavedNotice && !editingStructure && (
+                <p className="stepper-error-msg">
+                  La estructura se guardó: la aprobación quedó pendiente de
+                  nuevo.
+                </p>
+              )}
+
+              <h3>{structure.courseTitle}</h3>
+
+              {editingStructure && editStructure ? (
+                <>
+                  <div className="structure-tree">
+                    {editStructure.modules
+                      .slice()
+                      .sort((a, b) => a.order - b.order)
+                      .map((mod) => (
+                        <div className="structure-module" key={mod.id}>
+                          <div className="field">
+                            <label htmlFor={`mod-title-${mod.id}`}>
+                              Módulo
+                            </label>
+                            <input
+                              id={`mod-title-${mod.id}`}
+                              className="input"
+                              type="text"
+                              value={mod.title}
+                              onChange={(e) =>
+                                handleModuleTitleChange(
+                                  mod.id,
+                                  e.target.value
+                                )
+                              }
+                            />
+                          </div>
+                          {mod.topics.length > 0 && (
+                            <p className="structure-module-topics">
+                              {mod.topics.join(" · ")}
+                            </p>
+                          )}
+                          <ul className="structure-lesson-list">
+                            {mod.lessons
+                              .slice()
+                              .sort((a, b) => a.order - b.order)
+                              .map((lesson, idx, sortedLessons) => (
+                                <li
+                                  className="structure-lesson"
+                                  key={lesson.id}
+                                >
+                                  <div className="field">
+                                    <label
+                                      htmlFor={`lesson-title-${lesson.id}`}
+                                    >
+                                      Clase
+                                    </label>
+                                    <input
+                                      id={`lesson-title-${lesson.id}`}
+                                      className="input"
+                                      type="text"
+                                      value={lesson.title}
+                                      onChange={(e) =>
+                                        handleLessonTitleChange(
+                                          mod.id,
+                                          lesson.id,
+                                          e.target.value
+                                        )
+                                      }
+                                    />
+                                  </div>
+                                  <div className="row">
+                                    <button
+                                      className="btn btn-secondary"
+                                      type="button"
+                                      onClick={() =>
+                                        handleReorderLesson(
+                                          mod.id,
+                                          lesson.id,
+                                          -1
+                                        )
+                                      }
+                                      disabled={idx === 0}
+                                    >
+                                      ↑
+                                    </button>
+                                    <button
+                                      className="btn btn-secondary"
+                                      type="button"
+                                      onClick={() =>
+                                        handleReorderLesson(
+                                          mod.id,
+                                          lesson.id,
+                                          1
+                                        )
+                                      }
+                                      disabled={
+                                        idx === sortedLessons.length - 1
+                                      }
+                                    >
+                                      ↓
+                                    </button>
+                                    <select
+                                      className="select"
+                                      value={mod.id}
+                                      onChange={(e) =>
+                                        handleMoveLessonToModule(
+                                          mod.id,
+                                          lesson.id,
+                                          e.target.value
+                                        )
+                                      }
+                                    >
+                                      {editStructure.modules
+                                        .slice()
+                                        .sort((a, b) => a.order - b.order)
+                                        .map((m2) => (
+                                          <option key={m2.id} value={m2.id}>
+                                            {m2.title}
+                                          </option>
+                                        ))}
+                                    </select>
+                                  </div>
+                                  <ul className="structure-segment-list">
+                                    {lesson.segments.map((seg, idx2) => (
+                                      <li
+                                        className="structure-segment"
+                                        key={`${seg.clip}-${idx2}`}
+                                      >
+                                        <span className="badge">
+                                          {seg.clip}
+                                        </span>{" "}
+                                        <span className="structure-segment-range">
+                                          {formatTimestamp(seg.startSeconds)}–
+                                          {formatTimestamp(seg.endSeconds)}
+                                        </span>{" "}
+                                        <span className="structure-segment-topic">
+                                          {seg.topic}
+                                        </span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </li>
+                              ))}
+                          </ul>
+                        </div>
+                      ))}
+                  </div>
+
+                  <details className="decisiones-details">
+                    <summary>Editar JSON completo</summary>
+                    <textarea
+                      className="input"
+                      rows={20}
+                      value={structureJsonText}
+                      onChange={(e) => setStructureJsonText(e.target.value)}
+                    />
+                    <div className="stepper-actions">
+                      <button
+                        className="btn btn-secondary"
+                        type="button"
+                        onClick={handleApplyStructureJson}
+                      >
+                        Aplicar JSON
+                      </button>
+                    </div>
+                    {structureJsonError && (
+                      <p className="stepper-error-msg">
+                        {structureJsonError}
+                      </p>
+                    )}
+                  </details>
+
+                  <div className="stepper-actions">
+                    <button
+                      className="btn"
+                      type="button"
+                      onClick={handleSaveStructure}
+                      disabled={savingStructure}
+                    >
+                      {savingStructure ? "Guardando…" : "Guardar"}
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      type="button"
+                      onClick={handleCancelEdit}
+                      disabled={savingStructure}
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                  {saveStructureError && (
+                    <p className="stepper-error-msg">{saveStructureError}</p>
+                  )}
+                </>
+              ) : (
+                <div className="structure-tree">
+                  {structure.modules
+                    .slice()
+                    .sort((a, b) => a.order - b.order)
+                    .map((mod) => (
+                      <div className="structure-module" key={mod.id}>
+                        <h4>{mod.title}</h4>
+                        {mod.topics.length > 0 && (
+                          <p className="structure-module-topics">
+                            {mod.topics.join(" · ")}
+                          </p>
+                        )}
+                        <ul className="structure-lesson-list">
+                          {mod.lessons
+                            .slice()
+                            .sort((a, b) => a.order - b.order)
+                            .map((lesson) => (
+                              <li
+                                className="structure-lesson"
+                                key={lesson.id}
+                              >
+                                <span className="structure-lesson-title">
+                                  {lesson.title}
+                                </span>
+                                <ul className="structure-segment-list">
+                                  {lesson.segments.map((seg, idx) => (
+                                    <li
+                                      className="structure-segment"
+                                      key={`${seg.clip}-${idx}`}
+                                    >
+                                      <span className="badge">
+                                        {seg.clip}
+                                      </span>{" "}
+                                      <span className="structure-segment-range">
+                                        {formatTimestamp(seg.startSeconds)}–
+                                        {formatTimestamp(seg.endSeconds)}
+                                      </span>{" "}
+                                      <span className="structure-segment-topic">
+                                        {seg.topic}
+                                      </span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </li>
+                            ))}
+                        </ul>
+                      </div>
+                    ))}
+                </div>
+              )}
 
               {audit && audit.clips.length > 0 && (
                 <div className="clip-cards">

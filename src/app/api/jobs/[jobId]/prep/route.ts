@@ -19,10 +19,16 @@
  * falta ese prerequisito, la falla ocurrió antes de la preparación y se
  * responde 400 con un mensaje claro pidiendo reintentar el pipeline
  * completo (o al menos el plan).
+ *
+ * Gate de aprobación humana (etapa 6): antes de disparar la preparación se
+ * exige que plan/approval.json exista (la estructura fue aprobada tal como
+ * está en disco); si no existe y el body no trae force:true, responde 409.
+ * El body es opcional y tolerante: si falta o no es JSON válido, se trata
+ * como {} (equivalente a no pasar force).
  */
 import { promises as fs } from "node:fs";
 import { NextResponse } from "next/server";
-import { readJobJson, structureJsonPath } from "@/lib/jobs";
+import { readApprovalJson, readJobJson, structureJsonPath } from "@/lib/jobs";
 import { isPipelineRunning, runPrepOnly } from "@/lib/pipeline";
 import type { JobStatus } from "@/lib/types";
 
@@ -42,7 +48,7 @@ async function hasPrepPrerequisites(jobId: string): Promise<boolean> {
 }
 
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   const { jobId } = await params;
@@ -62,6 +68,31 @@ export async function POST(
       { error: "El proyecto ya se está procesando" },
       { status: 409 }
     );
+  }
+
+  // El body es opcional y tolerante: si falta o no es JSON válido, se trata
+  // como {} (equivalente a no pasar force:true).
+  let body: { force?: boolean } = {};
+  try {
+    const parsed = await request.json();
+    if (typeof parsed === "object" && parsed !== null) {
+      body = parsed as { force?: boolean };
+    }
+  } catch {
+    // Body ausente o inválido: se mantiene {} (sin force).
+  }
+
+  if (body.force !== true) {
+    const approval = await readApprovalJson(jobId);
+    if (!approval) {
+      return NextResponse.json(
+        {
+          error:
+            "La estructura no está aprobada. Aprueba en la UI o envía force:true.",
+        },
+        { status: 409 }
+      );
+    }
   }
 
   if (!PREP_READY_STATUSES.includes(job.status)) {

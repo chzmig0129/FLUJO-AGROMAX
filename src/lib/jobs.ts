@@ -15,6 +15,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type {
+  Approval,
   AssemblyProgressJson,
   AuditJson,
   CutsFile,
@@ -91,6 +92,15 @@ export function structureJsonPath(id: string): string {
 /** Ruta absoluta a plan/audit.json de un job. */
 export function auditJsonPath(id: string): string {
   return path.join(planDir(id), "audit.json");
+}
+
+/**
+ * Ruta absoluta a plan/approval.json de un job (etapa 6, gate de
+ * aprobación humana). Su existencia es la fuente de verdad de "la
+ * estructura fue aprobada tal como está en disco".
+ */
+export function approvalJsonPath(id: string): string {
+  return path.join(planDir(id), "approval.json");
 }
 
 /** Ruta absoluta a plan/decisiones.md de un job. */
@@ -366,6 +376,51 @@ export async function readStructureJson(
     return JSON.parse(raw) as StructureJson;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Escribe (o sobrescribe) plan/approval.json de un job (etapa 6, gate de
+ * aprobación humana). Crea plan/ de forma recursiva si todavía no existe.
+ */
+export async function writeApprovalJson(
+  id: string,
+  approval: Approval
+): Promise<void> {
+  await fs.mkdir(planDir(id), { recursive: true });
+  await fs.writeFile(
+    approvalJsonPath(id),
+    JSON.stringify(approval, null, 2),
+    "utf-8"
+  );
+}
+
+/**
+ * Lee plan/approval.json de un job. Devuelve null si todavía no existe (la
+ * estructura aún no fue aprobada, o fue invalidada por una edición) en vez
+ * de lanzar un error.
+ */
+export async function readApprovalJson(
+  id: string
+): Promise<Approval | null> {
+  try {
+    const raw = await fs.readFile(approvalJsonPath(id), "utf-8");
+    return JSON.parse(raw) as Approval;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Borra plan/approval.json de un job, tolerante a que no exista (no lanza
+ * error si ya estaba borrado o nunca se creó). Se usa cada vez que la
+ * estructura se edita vía PUT, porque editar invalida la aprobación previa.
+ */
+export async function deleteApprovalJson(id: string): Promise<void> {
+  try {
+    await fs.unlink(approvalJsonPath(id));
+  } catch {
+    // Tolerante: si no existe, no hay nada que borrar.
   }
 }
 

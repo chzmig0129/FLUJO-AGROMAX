@@ -405,6 +405,16 @@ export interface AssemblyProgressJson {
 }
 
 /**
+ * Aprobación humana de la estructura del curso (etapa 6, gate): registra
+ * cuándo un humano aprobó plan/structure.json tal como está en disco. Se
+ * persiste en plan/approval.json; cualquier PUT a structure.json borra este
+ * archivo, porque editar la estructura invalida la aprobación anterior.
+ */
+export interface Approval {
+  approvedAt: string;
+}
+
+/**
  * Sidecar de verificación escrito junto a cada render:
  * render/<lessonId>.json. Es la ÚNICA fuente de verdad sobre "este MP4 está
  * completo": la existencia del .mp4 no alcanza (un archivo a medio escribir
