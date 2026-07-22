@@ -296,30 +296,43 @@ export async function hasPlanPrerequisites(jobId: string): Promise<boolean> {
  * ejemplo tras configurar ANTHROPIC_API_KEY) sin re-transcribir todo el
  * material. Si el job está en 'error' pero le faltan esos prerequisitos, la
  * falla ocurrió antes del plan y hace falta reintentar el pipeline completo.
+ *
+ * `options.force` extiende esa misma excepción a CUALQUIER status (no solo
+ * 'error'): si el job ya tiene los prerequisitos del plan en disco, se
+ * permite re-planear aunque el status actual sea, por ejemplo, 'assembling'
+ * (caso real: se borraron los renders y hace falta re-planear sin volver a
+ * transcribir/muestrear). El status queda coherente porque el plan stage
+ * pone 'planning' -> 'planned' al correr.
  */
-export function runPlanOnly(jobId: string): Promise<void> {
+export function runPlanOnly(
+  jobId: string,
+  options?: { force?: boolean }
+): Promise<void> {
   const existing = running.get(jobId);
   if (existing) {
     return existing;
   }
 
-  const promise = executePlanOnly(jobId).finally(() => {
-    running.delete(jobId);
-  });
+  const promise = executePlanOnly(jobId, options?.force ?? false).finally(
+    () => {
+      running.delete(jobId);
+    }
+  );
 
   running.set(jobId, promise);
   return promise;
 }
 
 /** Ejecuta únicamente la etapa de plan, validando el status previo del job. */
-async function executePlanOnly(jobId: string): Promise<void> {
+async function executePlanOnly(jobId: string, force: boolean): Promise<void> {
   try {
     const current = await readJobJson(jobId);
     const readyByStatus = PLAN_READY_STATUSES.includes(current.status);
-    const readyByErrorWithPrereqs =
-      current.status === "error" && (await hasPlanPrerequisites(jobId));
+    const hasPrereqs = await hasPlanPrerequisites(jobId);
+    const readyByErrorWithPrereqs = current.status === "error" && hasPrereqs;
+    const readyByForceWithPrereqs = force && hasPrereqs;
 
-    if (!readyByStatus && !readyByErrorWithPrereqs) {
+    if (!readyByStatus && !readyByErrorWithPrereqs && !readyByForceWithPrereqs) {
       if (current.status === "error") {
         throw new Error(
           `No se puede reintentar solo el plan: el job "${jobId}" falló antes de completar el muestreo de frames (faltan transcripts/summary.json o frames/manifest.json). Reintenta el pipeline completo.`

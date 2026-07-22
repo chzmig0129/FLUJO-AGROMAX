@@ -19,6 +19,12 @@
  * el job está en 'error' pero le faltan esos prerequisitos, la falla ocurrió
  * antes del plan y se responde 400 con un mensaje claro pidiendo reintentar
  * el pipeline completo.
+ *
+ * Si el body trae `{ force: true }` y el job ya tiene esos mismos
+ * prerequisitos, se permite el re-plan desde CUALQUIER status (no solo
+ * 'error') mientras no haya un pipeline corriendo para ese job — por
+ * ejemplo un job en 'assembling' al que se le borraron los renders y hace
+ * falta re-planear sin re-transcribir ni re-muestrear.
  */
 import { NextResponse } from "next/server";
 import { readJobJson } from "@/lib/jobs";
@@ -35,10 +41,20 @@ export const runtime = "nodejs";
 const PLAN_READY_STATUSES: JobStatus[] = ["sampled", "planning", "planned"];
 
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   const { jobId } = await params;
+
+  let force = false;
+  try {
+    const body = await request.json();
+    force = body?.force === true;
+  } catch {
+    // Body ausente o no-JSON: se trata como force:false (comportamiento
+    // previo, sin body).
+    force = false;
+  }
 
   let job;
   try {
@@ -58,11 +74,21 @@ export async function POST(
   }
 
   if (!PLAN_READY_STATUSES.includes(job.status)) {
-    if (job.status === "error" && (await hasPlanPrerequisites(jobId))) {
+    const hasPrereqs = await hasPlanPrerequisites(jobId);
+
+    if (job.status === "error" && hasPrereqs) {
       // El job falló en (o después de) la etapa de plan, pero ya tiene los
       // prerequisitos reales (transcripción + muestreo de frames): se puede
       // reintentar solo el plan sin re-transcribir.
-      runPlanOnly(jobId).catch(console.error);
+      runPlanOnly(jobId, { force }).catch(console.error);
+      return NextResponse.json({ ok: true });
+    }
+
+    if (force && hasPrereqs) {
+      // Re-plan forzado desde cualquier status (ej. 'assembling' con los
+      // renders borrados): ya hay prerequisitos reales en disco y no hay
+      // pipeline corriendo (chequeado arriba), así que es seguro re-planear.
+      runPlanOnly(jobId, { force }).catch(console.error);
       return NextResponse.json({ ok: true });
     }
 
@@ -75,7 +101,7 @@ export async function POST(
   }
 
   // Fire-and-forget: no se espera a que termine el plan para responder.
-  runPlanOnly(jobId).catch(console.error);
+  runPlanOnly(jobId, { force }).catch(console.error);
 
   return NextResponse.json({ ok: true });
 }
