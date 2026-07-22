@@ -63,17 +63,18 @@ async function readCaptionsAudit(jobId: string): Promise<unknown | null> {
 }
 
 /**
- * Lee qa/gate3/<lessonId>.json de un job de forma tolerante (Gate 3 todavía
- * no tiene módulo dedicado en jobs.ts; se lee directo del filesystem).
- * Devuelve null si no existe o no es JSON válido.
+ * Lee qa/gate3/<moduleId>.json de un job de forma tolerante (Gate 3 audita
+ * el MÓDULO completo, no una lección individual — no tiene helper dedicado
+ * en jobs.ts; se lee directo del filesystem con la misma ruta que escribe
+ * gate3-stage.ts). Devuelve null si no existe o no es JSON válido.
  */
 async function readGate3Verdict(
   jobId: string,
-  lessonId: string
+  moduleId: string
 ): Promise<unknown | null> {
   try {
     const raw = await fs.readFile(
-      path.join(jobPath(jobId), "qa", "gate3", `${lessonId}.json`),
+      path.join(jobPath(jobId), "qa", "gate3", `${moduleId}.json`),
       "utf-8"
     );
     return JSON.parse(raw);
@@ -160,6 +161,7 @@ function formatKeepRanges(cuts: CutsFile): string {
 /** Arma el NOTAS.md de una clase individual. */
 async function buildNotasMd(
   jobId: string,
+  moduleId: string,
   moduleTitle: string,
   lesson: StructureJson["modules"][number]["lessons"][number],
   cuts: CutsFile | undefined
@@ -169,7 +171,7 @@ async function buildNotasMd(
   );
 
   const gate2Raw = await readGate2Verdict(jobId, lesson.id);
-  const gate3Raw = await readGate3Verdict(jobId, lesson.id);
+  const gate3Raw = await readGate3Verdict(jobId, moduleId);
   const captionsAudit = await readCaptionsAudit(jobId);
   const correcciones = extractCaptionsCorrections(captionsAudit, lesson.id);
 
@@ -244,7 +246,7 @@ async function buildQaLogMd(
   for (const module of [...structure.modules].sort((a, b) => a.order - b.order)) {
     for (const lesson of [...module.lessons].sort((a, b) => a.order - b.order)) {
       const gate2Raw = await readGate2Verdict(jobId, lesson.id);
-      const gate3Raw = await readGate3Verdict(jobId, lesson.id);
+      const gate3Raw = await readGate3Verdict(jobId, module.id);
       lines.push(`## M${module.order}C${lesson.order} — ${lesson.title} (\`${lesson.id}\`)`);
       lines.push(formatGateVerdict("Gate 2 (QA visual)", gate2Raw));
       if (gate3Raw !== null) {
@@ -337,6 +339,7 @@ export async function runPackageStage(jobId: string): Promise<void> {
 
       const notasContent = await buildNotasMd(
         jobId,
+        module.id,
         module.title,
         lesson,
         cutsByLesson.get(lesson.id)
