@@ -32,6 +32,13 @@
 - Decidir la lección afín usando el contexto: transcript/resumen del clip, decisiones previas y, si hace falta, los frames.
 - Solo el B-roll descartado (veredicto distinto de "broll" con decisión de descarte, basura, retake fallido, etc.) queda fuera de structure.json.
 
+## arranques-limpios
+
+- Al definir el `start` de cada segment (etapa 4), examina la transcripción del inicio del clip: conteos del instructor ("3, 2, 1", "uno, dos, tres"), claquetas verbales, preguntas de grabación ("¿ya está grabando?", "¿ya?") y respiraciones/falsos inicios repetidos NO son contenido del tema — hay que saltarlos, no incluirlos en el segment.
+- El conteo transcrito por Whisper es la evidencia: usa el timestamp de la primera palabra de CONTENIDO real (la primera frase del tema, no el conteo) menos ~0.3s de aire como `start`.
+- Ejemplo real (curso OVINOS): la transcripción arranca "2, 1, hola..." → el `start` cae en "hola" (o en la primera frase del tema), nunca en "2" ni "1".
+- Simétricamente, al final del segment, corta despedidas de toma si existen ("corte", "ya quedó").
+
 ## basura-tipica
 
 - Texto alucinado repetido ("todo todo", "tú tú") suele indicar transcripción basura.
