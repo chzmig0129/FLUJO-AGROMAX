@@ -112,6 +112,45 @@ async function readOverlayBriefs(
   }
 }
 
+/**
+ * Lee qa/gate1.json de un job (veredicto del Gate 1: QA visual por overlay,
+ * ver src/lib/gate1-stage.ts). Devuelve null si Gate 1 todavía no corrió (o
+ * si el JSON está a medio escribir), en vez de lanzar un error. Lectura
+ * tolerante, mismo patrón que readGate3Verdict.
+ */
+async function readGate1Verdict(id: string): Promise<unknown | null> {
+  try {
+    const raw = await fs.readFile(
+      path.join(jobPath(id), "qa", "gate1.json"),
+      "utf-8"
+    );
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Lee plan/overlays-timeline/<lessonId>.json de un job (remapeo de overlays
+ * al timeline de salida, ver src/lib/overlays-timeline-stage.ts). Devuelve
+ * null si la lección todavía no tiene timeline de overlays calculado.
+ * Lectura tolerante, mismo patrón que readOverlayBriefs.
+ */
+async function readOverlaysTimeline(
+  id: string,
+  lessonId: string
+): Promise<unknown | null> {
+  try {
+    const raw = await fs.readFile(
+      path.join(jobPath(id), "plan", "overlays-timeline", `${lessonId}.json`),
+      "utf-8"
+    );
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ jobId: string }> }
@@ -166,6 +205,11 @@ export async function GET(
       readRenderSidecars(jobId),
     ]);
 
+    // Veredicto del Gate 1 (QA visual por overlay, previo al ensamblaje):
+    // uno solo por job (no por lección). Lectura tolerante (null si Gate 1
+    // todavía no corrió).
+    const gate1 = await readGate1Verdict(jobId);
+
     // Veredictos del Gate 2 (QA visual, etapa posterior al ensamblaje): uno
     // por cada lección que ya tiene un render verificado. Lectura tolerante
     // (readGate2Verdict devuelve null si la lección todavía no fue auditada).
@@ -189,6 +233,11 @@ export async function GET(
     // cada lección de la estructura, si ya existe. Lectura tolerante (null
     // si la lección todavía no tiene briefs generados).
     const overlayBriefs: Record<string, unknown | null> = {};
+    // Timeline de overlays ya remapeado al timeline de salida (etapa
+    // posterior a Gate 1): uno por cada lección de la estructura, si ya
+    // existe. Lectura tolerante (null si la lección todavía no tiene
+    // timeline de overlays calculado).
+    const overlaysTimeline: Record<string, unknown | null> = {};
     if (structure) {
       await Promise.all([
         ...structure.modules.map(async (m) => {
@@ -197,6 +246,11 @@ export async function GET(
         ...structure.modules.flatMap((m) =>
           m.lessons.map(async (l) => {
             overlayBriefs[l.id] = await readOverlayBriefs(jobId, l.id);
+          })
+        ),
+        ...structure.modules.flatMap((m) =>
+          m.lessons.map(async (l) => {
+            overlaysTimeline[l.id] = await readOverlaysTimeline(jobId, l.id);
           })
         ),
       ]);
@@ -226,6 +280,8 @@ export async function GET(
       gate3Verdicts,
       packageManifest,
       overlayBriefs,
+      gate1,
+      overlaysTimeline,
     });
   } catch {
     return NextResponse.json(

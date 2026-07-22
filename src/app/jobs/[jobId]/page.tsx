@@ -126,6 +126,38 @@ interface OverlayBriefsFile {
   briefs: OverlayBrief[];
 }
 
+/** Veredicto de una imagen dentro de qa/gate1.json (Gate 1: QA visual por overlay). */
+interface Gate1ImageVerdict {
+  key: string;
+  verdict: "APPROVED" | "REJECTED";
+  causa?: string;
+  causa_categoria?: string;
+  escalar?: boolean;
+  escalar_motivo?: string;
+}
+
+/** Forma de qa/gate1.json (veredicto del Gate 1, uno solo por job). */
+interface Gate1Verdict {
+  auditedAt: string;
+  images: Gate1ImageVerdict[];
+}
+
+/** Un overlay ya remapeado al timeline de salida de una clase (post-Gate 1). */
+interface OverlayTimelineItem {
+  key: string;
+  file: string;
+  startFrame: number;
+  endFrame: number;
+  aspect: number;
+}
+
+/** Forma de plan/overlays-timeline/<lessonId>.json (timeline de overlays de una clase). */
+interface OverlayTimelineFile {
+  lessonId: string;
+  fps: number;
+  overlays: OverlayTimelineItem[];
+}
+
 /** Forma del summary.json que arma la etapa de transcripción. */
 interface SummaryFile {
   filename: string;
@@ -164,6 +196,10 @@ interface JobApiResponse {
   packageManifest?: PackageManifest | null;
   /** Briefs de overlays por lección, o null si aún no fueron generados. */
   overlayBriefs?: Record<string, OverlayBriefsFile | null>;
+  /** Veredicto del Gate 1 (QA visual por overlay), o null si aún no corrió. */
+  gate1?: Gate1Verdict | null;
+  /** Timeline de overlays por lección, o null si aún no fue calculado. */
+  overlaysTimeline?: Record<string, OverlayTimelineFile | null>;
 }
 
 const POLL_INTERVAL_MS = 2000;
@@ -372,6 +408,31 @@ export default function JobPage() {
   const [overlayBriefsError, setOverlayBriefsError] = useState<
     string | null
   >(null);
+
+  // Generación de las imágenes de los overlays (scraper CDP + composite):
+  // POST síncrono (fire-and-forget en el backend), sin polling dedicado,
+  // mismo patrón que handleOverlayBriefs. Requiere Chrome corriendo con CDP
+  // ya logueado en el Mac donde corre este servidor.
+  const [generatingOverlayImages, setGeneratingOverlayImages] =
+    useState(false);
+  const [overlayGenError, setOverlayGenError] = useState<string | null>(
+    null
+  );
+
+  // Gate 1 (QA visual por overlay, previo al ensamblaje): un solo veredicto
+  // por job (no por lección), fire-and-forget en el backend con polling
+  // dedicado tras el POST, mismo patrón que Gate 2 (ver handleGate2) pero
+  // sin keyear por lessonId.
+  const [gate1Loading, setGate1Loading] = useState(false);
+  const [gate1Error, setGate1Error] = useState<string | null>(null);
+
+  // Recalcular el timeline de overlays (remapeo post-Gate 1): POST
+  // síncrono (fire-and-forget en el backend, pero es aritmética pura y
+  // rápida), sin polling dedicado, mismo patrón que handleOverlayBriefs.
+  const [recalculatingTimeline, setRecalculatingTimeline] = useState(false);
+  const [overlaysTimelineError, setOverlaysTimelineError] = useState<
+    string | null
+  >(null);
   const [showMaster, setShowMaster] = useState(false);
   const [masterText, setMasterText] = useState<string | null>(null);
   const [masterLoading, setMasterLoading] = useState(false);
@@ -415,6 +476,30 @@ export default function JobPage() {
       clearTimeout(timers.timeoutId);
       delete gate2PollTimersRef.current[lessonId];
     }
+  }, []);
+
+  // Polling dedicado de Gate 1: mismo patrón que Gate 2, pero sin keyear por
+  // lessonId porque el veredicto de Gate 1 es uno solo por job.
+  const gate1PollTimerRef = useRef<{
+    intervalId: ReturnType<typeof setInterval>;
+    timeoutId: ReturnType<typeof setTimeout>;
+  } | null>(null);
+
+  const stopGate1Polling = useCallback(() => {
+    if (gate1PollTimerRef.current) {
+      clearInterval(gate1PollTimerRef.current.intervalId);
+      clearTimeout(gate1PollTimerRef.current.timeoutId);
+      gate1PollTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (gate1PollTimerRef.current) {
+        clearInterval(gate1PollTimerRef.current.intervalId);
+        clearTimeout(gate1PollTimerRef.current.timeoutId);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -1130,6 +1215,119 @@ export default function JobPage() {
     }
   }, [jobId, loadJob]);
 
+  /**
+   * Genera las imágenes de los overlays vía POST /api/jobs/<id>/overlay-gen
+   * {}. Requiere Chrome corriendo con depuración remota (CDP, puerto 9222)
+   * YA LOGUEADO en el Mac donde corre este servidor — no funciona en otro
+   * entorno. Fire-and-forget en el backend; igual que handleOverlayBriefs,
+   * responde de forma síncrona (ok:true o error) y un loadJob() alcanza
+   * para reflejar cualquier cambio visible.
+   */
+  const handleOverlayGen = useCallback(async () => {
+    setOverlayGenError(null);
+    setGeneratingOverlayImages(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/overlay-gen`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setOverlayGenError(
+          body?.error ?? "No se pudieron generar las imágenes de overlays."
+        );
+        return;
+      }
+      await loadJob();
+    } catch {
+      setOverlayGenError(
+        "No se pudieron generar las imágenes de overlays."
+      );
+    } finally {
+      setGeneratingOverlayImages(false);
+    }
+  }, [jobId, loadJob]);
+
+  /**
+   * Dispara el Gate 1 (QA visual por overlay, previo al ensamblaje) vía
+   * POST /api/jobs/<id>/gate1 {}. Igual que Gate 2 (ver handleGate2), el
+   * endpoint es fire-and-forget y el job se queda en un status estable
+   * mientras el juez corre en background, así que tras el POST arrancamos
+   * un polling dedicado que refetchea el job hasta que `gate1` cambie
+   * respecto al valor que tenía justo al arrancar el polling. A diferencia
+   * de Gate 2, el veredicto de Gate 1 es uno solo por job (no por lección),
+   * así que no hace falta keyear el estado.
+   */
+  const handleGate1 = useCallback(async () => {
+    setGate1Error(null);
+    setGate1Loading(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/gate1`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setGate1Error(body?.error ?? "No se pudo correr el Gate 1.");
+        return;
+      }
+      const body = await loadJob();
+      const previousVerdict = JSON.stringify(body?.gate1 ?? null);
+
+      stopGate1Polling();
+      const intervalId = setInterval(async () => {
+        const nextBody = await loadJob();
+        const nextVerdict = JSON.stringify(nextBody?.gate1 ?? null);
+        if (nextVerdict !== previousVerdict) {
+          stopGate1Polling();
+        }
+      }, GATE2_POLL_INTERVAL_MS);
+      const timeoutId = setTimeout(() => {
+        stopGate1Polling();
+      }, GATE2_POLL_TIMEOUT_MS);
+      gate1PollTimerRef.current = { intervalId, timeoutId };
+    } catch {
+      setGate1Error("No se pudo correr el Gate 1.");
+    } finally {
+      setGate1Loading(false);
+    }
+  }, [jobId, loadJob, stopGate1Polling]);
+
+  /**
+   * Recalcula el timeline de overlays (remapeo post-Gate 1 al timeline de
+   * salida) vía POST /api/jobs/<id>/overlays-timeline {}. Responde de forma
+   * síncrona (fire-and-forget en el backend, pero es aritmética pura y
+   * rápida sobre lo que ya calcularon las etapas previas), así que un
+   * loadJob() tras el POST alcanza, mismo patrón que handleOverlayBriefs.
+   */
+  const handleOverlaysTimeline = useCallback(async () => {
+    setOverlaysTimelineError(null);
+    setRecalculatingTimeline(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/overlays-timeline`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setOverlaysTimelineError(
+          body?.error ?? "No se pudo recalcular el timeline de overlays."
+        );
+        return;
+      }
+      await loadJob();
+    } catch {
+      setOverlaysTimelineError(
+        "No se pudo recalcular el timeline de overlays."
+      );
+    } finally {
+      setRecalculatingTimeline(false);
+    }
+  }, [jobId, loadJob]);
+
   const handleToggleMaster = useCallback(async () => {
     const next = !showMaster;
     setShowMaster(next);
@@ -1187,6 +1385,8 @@ export default function JobPage() {
     gate3Verdicts,
     packageManifest,
     overlayBriefs,
+    gate1,
+    overlaysTimeline,
   } = data;
   const isError = job.status === "error";
   // El job puede reintentar solo el plan (sin re-transcribir) si falló
@@ -2448,6 +2648,92 @@ export default function JobPage() {
                       {file?.briefs.map((b) => (
                         <li key={b.key}>
                           {b.key} — {b.fact} (t={b.at_seconds}s)
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ))}
+
+            <p className="audit-hint">
+              La generación de imágenes requiere Chrome corriendo en este Mac
+              con depuración remota (CDP, puerto 9222) YA LOGUEADO — no
+              funciona en otro entorno ni sin sesión iniciada.
+            </p>
+            <div className="stepper-actions">
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={handleOverlayGen}
+                disabled={generatingOverlayImages}
+              >
+                {generatingOverlayImages
+                  ? "Generando imágenes…"
+                  : "Generar imágenes (Mac + Chrome CDP)"}
+              </button>
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={handleGate1}
+                disabled={gate1Loading}
+              >
+                {gate1Loading ? "Corriendo Gate 1…" : "Gate 1"}
+              </button>
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={handleOverlaysTimeline}
+                disabled={recalculatingTimeline}
+              >
+                {recalculatingTimeline
+                  ? "Recalculando…"
+                  : "Recalcular timeline"}
+              </button>
+            </div>
+            {overlayGenError && (
+              <p className="stepper-error-msg">{overlayGenError}</p>
+            )}
+            {gate1Error && (
+              <p className="stepper-error-msg">{gate1Error}</p>
+            )}
+            {overlaysTimelineError && (
+              <p className="stepper-error-msg">{overlaysTimelineError}</p>
+            )}
+
+            {gate1 && (
+              <div className="gate1-result">
+                <p className="assembly-card-meta">
+                  Gate 1 auditado: {gate1.auditedAt}
+                </p>
+                <ul className="cuts-list">
+                  {gate1.images.map((img) => (
+                    <li key={img.key}>
+                      {img.verdict === "APPROVED" ? "✅" : "❌"} {img.key}
+                      {img.causa ? ` — ${img.causa}` : ""}
+                      {img.escalar ? " 🔺 escalar" : ""}
+                      {img.escalar && img.escalar_motivo
+                        ? ` (${img.escalar_motivo})`
+                        : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {overlaysTimeline &&
+              Object.entries(overlaysTimeline)
+                .filter(([, file]) => file !== null)
+                .map(([lessonId, file]) => (
+                  <details className="cuts-details" key={`timeline-${lessonId}`}>
+                    <summary>
+                      {lessonTitles.get(lessonId) ?? lessonId} (
+                      {file?.overlays.length ?? 0} overlay
+                      {file?.overlays.length === 1 ? "" : "s"} en timeline)
+                    </summary>
+                    <ul className="cuts-list">
+                      {file?.overlays.map((o) => (
+                        <li key={o.key}>
+                          {o.key} — frames [{o.startFrame}, {o.endFrame}) —{" "}
+                          {o.file}
                         </li>
                       ))}
                     </ul>
