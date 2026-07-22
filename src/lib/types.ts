@@ -515,3 +515,26 @@ export interface Gate2FramesManifest {
   durationSeconds: number;
   frames: Gate2Frame[];
 }
+
+/* ------------------------------------------------------------------ *
+ * Etapa 16 (empaquetado de entrega: deliver/)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Representación persistida de jobs/<id>/deliver/manifest.json (etapa 16):
+ * el resultado del empaquetado final del curso en una carpeta de entrega
+ * auditable, con un renglón por clase efectivamente empaquetada.
+ */
+export interface PackageManifest {
+  packagedAt: string;
+  /** Nombre del directorio del curso dentro de deliver/, ej. "CURSO_mi_curso". */
+  courseDir: string;
+  lessons: Array<{
+    lessonId: string;
+    moduleId: string;
+    /** Ruta relativa (desde `courseDir`) al .mp4 renombrado de la clase. */
+    fileName: string;
+    /** Ruta relativa (desde `courseDir`) al NOTAS.md de la clase. */
+    notasPath: string;
+  }>;
+}

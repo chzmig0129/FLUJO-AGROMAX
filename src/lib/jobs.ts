@@ -25,6 +25,7 @@ import type {
   JobJson,
   JobStatus,
   MediaInfo,
+  PackageManifest,
   ProgressJson,
   RenderSidecar,
   SilenceJson,
@@ -760,6 +761,36 @@ export async function readGate2Verdict(
   try {
     const raw = await fs.readFile(gate2VerdictPath(id, lessonId), "utf-8");
     return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Etapa 16 (empaquetado de entrega: deliver/)
+ * ------------------------------------------------------------------ */
+
+/** Ruta absoluta al subdirectorio de entrega empaquetada de un job (etapa 16). */
+export function deliverDir(id: string): string {
+  return path.join(jobPath(id), "deliver");
+}
+
+/** Ruta absoluta a deliver/manifest.json de un job (etapa 16). */
+export function packageManifestPath(id: string): string {
+  return path.join(deliverDir(id), "manifest.json");
+}
+
+/**
+ * Lee deliver/manifest.json de un job. Devuelve null si todavía no existe
+ * (job que aún no llegó a la etapa de empaquetado) o si el contenido no es
+ * JSON válido, en vez de lanzar un error.
+ */
+export async function readPackageManifest(
+  id: string
+): Promise<PackageManifest | null> {
+  try {
+    const raw = await fs.readFile(packageManifestPath(id), "utf-8");
+    return JSON.parse(raw) as PackageManifest;
   } catch {
     return null;
   }

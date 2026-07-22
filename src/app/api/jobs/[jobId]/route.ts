@@ -15,6 +15,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import {
+  jobPath,
   readApprovalJson,
   readAssemblyProgressJson,
   readAuditJson,
@@ -45,6 +46,64 @@ async function readSummaryJson(id: string): Promise<unknown | null> {
   try {
     const raw = await fs.readFile(
       path.join(transcriptsDir(id), "summary.json"),
+      "utf-8"
+    );
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Lee qa/gate3/<moduleId>.json de un job. Devuelve null si el módulo
+ * todavía no fue auditado (o si el JSON está a medio escribir), en vez de
+ * lanzar un error. No hay helper dedicado en jobs.ts para esto, así que se
+ * lee directo con fs desde jobPath (mismo patrón tolerante que
+ * readCaptionsFile en src/lib/assembly/plan.ts).
+ */
+async function readGate3Verdict(
+  id: string,
+  moduleId: string
+): Promise<unknown | null> {
+  try {
+    const raw = await fs.readFile(
+      path.join(jobPath(id), "qa", "gate3", `${moduleId}.json`),
+      "utf-8"
+    );
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Lee deliver/manifest.json de un job. Devuelve null si el curso todavía no
+ * fue empaquetado. Lectura tolerante, mismo patrón que readSummaryJson.
+ */
+async function readPackageManifest(id: string): Promise<unknown | null> {
+  try {
+    const raw = await fs.readFile(
+      path.join(jobPath(id), "deliver", "manifest.json"),
+      "utf-8"
+    );
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Lee plan/overlays/<lessonId>.json de un job. Devuelve null si la lección
+ * todavía no tiene briefs de overlays generados. Lectura tolerante, mismo
+ * patrón que readCaptionsFile en src/lib/assembly/plan.ts.
+ */
+async function readOverlayBriefs(
+  id: string,
+  lessonId: string
+): Promise<unknown | null> {
+  try {
+    const raw = await fs.readFile(
+      path.join(jobPath(id), "plan", "overlays", `${lessonId}.json`),
       "utf-8"
     );
     return JSON.parse(raw);
@@ -122,6 +181,31 @@ export async function GET(
       );
     }
 
+    // Veredictos del Gate 3 (revisión de módulo completo): uno por cada
+    // módulo de la estructura, si ya existe. Lectura tolerante (null si el
+    // módulo todavía no fue auditado).
+    const gate3Verdicts: Record<string, unknown | null> = {};
+    // Briefs de overlays generados (etapa de plan de overlays): uno por
+    // cada lección de la estructura, si ya existe. Lectura tolerante (null
+    // si la lección todavía no tiene briefs generados).
+    const overlayBriefs: Record<string, unknown | null> = {};
+    if (structure) {
+      await Promise.all([
+        ...structure.modules.map(async (m) => {
+          gate3Verdicts[m.id] = await readGate3Verdict(jobId, m.id);
+        }),
+        ...structure.modules.flatMap((m) =>
+          m.lessons.map(async (l) => {
+            overlayBriefs[l.id] = await readOverlayBriefs(jobId, l.id);
+          })
+        ),
+      ]);
+    }
+
+    // Manifest de empaquetado del curso (etapa de entrega): null si el
+    // curso todavía no fue empaquetado.
+    const packageManifest = await readPackageManifest(jobId);
+
     return NextResponse.json({
       job,
       media,
@@ -139,6 +223,9 @@ export async function GET(
       assemblyProgress,
       renders: renders.length > 0 ? renders : null,
       gate2Verdicts,
+      gate3Verdicts,
+      packageManifest,
+      overlayBriefs,
     });
   } catch {
     return NextResponse.json(

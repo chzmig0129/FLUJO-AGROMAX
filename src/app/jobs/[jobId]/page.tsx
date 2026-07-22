@@ -78,6 +78,54 @@ interface Gate2Verdict {
   problemas: Gate2Problema[];
 }
 
+/** Un hallazgo detectado por el Gate 3 (revisión de módulo completo). */
+interface Gate3Hallazgo {
+  tipo: string;
+  detalle: string;
+  severidad: string;
+  lessonId?: string;
+}
+
+/** Forma del veredicto del Gate 3 leído de qa/gate3/<moduleId>.json. */
+interface Gate3Verdict {
+  moduleId: string;
+  auditedAt: string;
+  verdict: "APPROVED" | "REJECTED";
+  hallazgos: Gate3Hallazgo[];
+}
+
+/** Una lección empaquetada, leída de deliver/manifest.json. */
+interface PackageManifestLesson {
+  lessonId: string;
+  moduleId: string;
+  fileName: string;
+  notasPath: string;
+}
+
+/** Forma de deliver/manifest.json (empaquetado del curso para entrega). */
+interface PackageManifest {
+  packagedAt: string;
+  courseDir: string;
+  lessons: PackageManifestLesson[];
+}
+
+/** Un brief de overlay generado para una clase. */
+interface OverlayBrief {
+  key: string;
+  fact: string;
+  at_seconds: number;
+  clip: string;
+  prompt: string;
+  aspect: string;
+}
+
+/** Forma de plan/overlays/<lessonId>.json (briefs de overlays de una clase). */
+interface OverlayBriefsFile {
+  lessonId: string;
+  generatedAt: string;
+  briefs: OverlayBrief[];
+}
+
 /** Forma del summary.json que arma la etapa de transcripción. */
 interface SummaryFile {
   filename: string;
@@ -110,6 +158,12 @@ interface JobApiResponse {
   renders: RenderSidecar[] | null;
   /** Veredicto del Gate 2 (QA visual) por lección, o null si aún no fue auditada. */
   gate2Verdicts?: Record<string, Gate2Verdict | null>;
+  /** Veredicto del Gate 3 (revisión de módulo) por módulo, o null si aún no fue auditado. */
+  gate3Verdicts?: Record<string, Gate3Verdict | null>;
+  /** Manifest de empaquetado del curso (etapa de entrega), o null si aún no fue empaquetado. */
+  packageManifest?: PackageManifest | null;
+  /** Briefs de overlays por lección, o null si aún no fueron generados. */
+  overlayBriefs?: Record<string, OverlayBriefsFile | null>;
 }
 
 const POLL_INTERVAL_MS = 2000;
@@ -122,6 +176,15 @@ const POLL_INTERVAL_MS = 2000;
  */
 const GATE2_POLL_INTERVAL_MS = 10_000;
 const GATE2_POLL_TIMEOUT_MS = 25 * 60 * 1000;
+
+/**
+ * El juez de Gate 3 (revisión de módulo completo, también fire-and-forget
+ * en el backend) sigue el mismo patrón que Gate 2: el job se queda en un
+ * status estable mientras corre, así que usamos un polling dedicado por
+ * módulo tras el POST /gate3, con el mismo intervalo/timeout que Gate 2.
+ */
+const GATE3_POLL_INTERVAL_MS = GATE2_POLL_INTERVAL_MS;
+const GATE3_POLL_TIMEOUT_MS = GATE2_POLL_TIMEOUT_MS;
 
 /** Etapas mostradas en el stepper, en orden. */
 type StepKey =
@@ -293,6 +356,22 @@ export default function JobPage() {
   // trackea cuál está corriendo y su error por separado.
   const [gate2Loading, setGate2Loading] = useState<string | null>(null);
   const [gate2Errors, setGate2Errors] = useState<Record<string, string>>({});
+
+  // Gate 3 (revisión de módulo completo): se dispara por moduleId, mismo
+  // patrón que Gate 2 (polling dedicado tras el POST, ver handleGate3).
+  const [gate3Loading, setGate3Loading] = useState<string | null>(null);
+  const [gate3Errors, setGate3Errors] = useState<Record<string, string>>({});
+
+  // Empaquetado del curso (etapa de entrega): POST síncrono, sin polling
+  // dedicado — al terminar, loadJob() ya trae el manifest actualizado.
+  const [packaging, setPackaging] = useState(false);
+  const [packageError, setPackageError] = useState<string | null>(null);
+
+  // Generación de briefs de overlays: POST síncrono, sin polling dedicado.
+  const [generatingBriefs, setGeneratingBriefs] = useState(false);
+  const [overlayBriefsError, setOverlayBriefsError] = useState<
+    string | null
+  >(null);
   const [showMaster, setShowMaster] = useState(false);
   const [masterText, setMasterText] = useState<string | null>(null);
   const [masterLoading, setMasterLoading] = useState(false);
@@ -343,6 +422,39 @@ export default function JobPage() {
     return () => {
       Object.keys(timersRef.current).forEach((lessonId) => {
         const timers = timersRef.current[lessonId];
+        clearInterval(timers.intervalId);
+        clearTimeout(timers.timeoutId);
+      });
+      timersRef.current = {};
+    };
+  }, []);
+
+  // Polling dedicado de Gate 3 por moduleId: mismo patrón que Gate 2 (ver
+  // comentario de GATE3_POLL_INTERVAL_MS/GATE3_POLL_TIMEOUT_MS arriba).
+  const gate3PollTimersRef = useRef<
+    Record<
+      string,
+      {
+        intervalId: ReturnType<typeof setInterval>;
+        timeoutId: ReturnType<typeof setTimeout>;
+      }
+    >
+  >({});
+
+  const stopGate3Polling = useCallback((moduleId: string) => {
+    const timers = gate3PollTimersRef.current[moduleId];
+    if (timers) {
+      clearInterval(timers.intervalId);
+      clearTimeout(timers.timeoutId);
+      delete gate3PollTimersRef.current[moduleId];
+    }
+  }, []);
+
+  useEffect(() => {
+    const timersRef = gate3PollTimersRef;
+    return () => {
+      Object.keys(timersRef.current).forEach((moduleId) => {
+        const timers = timersRef.current[moduleId];
         clearInterval(timers.intervalId);
         clearTimeout(timers.timeoutId);
       });
@@ -901,6 +1013,123 @@ export default function JobPage() {
     [jobId, loadJob, stopGate2Polling]
   );
 
+  /**
+   * Dispara la revisión de módulo completo (Gate 3) vía
+   * POST /api/jobs/<id>/gate3 {moduleId}. Fire-and-forget en el backend,
+   * igual que Gate 2: tras el POST arrancamos un polling dedicado para este
+   * módulo que refetchea el job hasta que gate3Verdicts[moduleId] cambie
+   * respecto al valor que tenía justo al arrancar el polling.
+   */
+  const handleGate3 = useCallback(
+    async (moduleId: string) => {
+      setGate3Errors((prev) => {
+        const next = { ...prev };
+        delete next[moduleId];
+        return next;
+      });
+      setGate3Loading(moduleId);
+      try {
+        const res = await fetch(`/api/jobs/${jobId}/gate3`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ moduleId }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          setGate3Errors((prev) => ({
+            ...prev,
+            [moduleId]: body?.error ?? "No se pudo correr la revisión de módulo.",
+          }));
+          return;
+        }
+        const body = await loadJob();
+        const previousVerdict = JSON.stringify(
+          body?.gate3Verdicts?.[moduleId] ?? null
+        );
+
+        stopGate3Polling(moduleId);
+        const intervalId = setInterval(async () => {
+          const nextBody = await loadJob();
+          const nextVerdict = JSON.stringify(
+            nextBody?.gate3Verdicts?.[moduleId] ?? null
+          );
+          if (nextVerdict !== previousVerdict) {
+            stopGate3Polling(moduleId);
+          }
+        }, GATE3_POLL_INTERVAL_MS);
+        const timeoutId = setTimeout(() => {
+          stopGate3Polling(moduleId);
+        }, GATE3_POLL_TIMEOUT_MS);
+        gate3PollTimersRef.current[moduleId] = { intervalId, timeoutId };
+      } catch {
+        setGate3Errors((prev) => ({
+          ...prev,
+          [moduleId]: "No se pudo correr la revisión de módulo.",
+        }));
+      } finally {
+        setGate3Loading(null);
+      }
+    },
+    [jobId, loadJob, stopGate3Polling]
+  );
+
+  /**
+   * Empaqueta el curso para entrega vía POST /api/jobs/<id>/package {}. A
+   * diferencia de Gate 2/3, este endpoint responde de forma síncrona (o con
+   * 400 si todavía no hay renders), así que un simple loadJob() tras el
+   * POST alcanza para reflejar el manifest actualizado.
+   */
+  const handlePackage = useCallback(async () => {
+    setPackageError(null);
+    setPackaging(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/package`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setPackageError(body?.error ?? "No se pudo empaquetar el curso.");
+        return;
+      }
+      await loadJob();
+    } catch {
+      setPackageError("No se pudo empaquetar el curso.");
+    } finally {
+      setPackaging(false);
+    }
+  }, [jobId, loadJob]);
+
+  /**
+   * Genera los briefs de overlays de todas las lecciones vía
+   * POST /api/jobs/<id>/overlay-briefs {}. Igual que el empaquetado,
+   * responde de forma síncrona, así que un simple loadJob() alcanza.
+   */
+  const handleOverlayBriefs = useCallback(async () => {
+    setOverlayBriefsError(null);
+    setGeneratingBriefs(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/overlay-briefs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setOverlayBriefsError(
+          body?.error ?? "No se pudieron generar los briefs de overlays."
+        );
+        return;
+      }
+      await loadJob();
+    } catch {
+      setOverlayBriefsError("No se pudieron generar los briefs de overlays.");
+    } finally {
+      setGeneratingBriefs(false);
+    }
+  }, [jobId, loadJob]);
+
   const handleToggleMaster = useCallback(async () => {
     const next = !showMaster;
     setShowMaster(next);
@@ -955,6 +1184,9 @@ export default function JobPage() {
     assemblyProgress,
     renders,
     gate2Verdicts,
+    gate3Verdicts,
+    packageManifest,
+    overlayBriefs,
   } = data;
   const isError = job.status === "error";
   // El job puede reintentar solo el plan (sin re-transcribir) si falló
@@ -1029,6 +1261,9 @@ export default function JobPage() {
   // del .mp4 nunca alcanza (ver assembly/verify.ts).
   const completedRenders = renders ?? [];
   const rendersByLesson = new Map(completedRenders.map((r) => [r.lessonId, r]));
+  // El empaquetado se ofrece desde que hay al menos un render verificado
+  // (el backend responde 400 sin renders — ver POST /package).
+  const canPackage = completedRenders.length > 0;
   // Título legible por lección, para las tarjetas de reproducción.
   const lessonTitles = new Map<string, string>();
   for (const module of structure?.modules ?? []) {
@@ -2075,6 +2310,150 @@ export default function JobPage() {
               )}
             </section>
           )}
+
+          {structure && (
+            <section className="gate3-section">
+              <h2>Revisión de módulo (Gate 3)</h2>
+              <p className="audit-hint">
+                Auditoría de coherencia sobre el módulo completo, una vez que
+                sus clases ya están ensambladas.
+              </p>
+              <div className="gate3-grid">
+                {structure.modules.map((module) => {
+                  const verdict = gate3Verdicts?.[module.id] ?? null;
+                  const running = gate3Loading === module.id;
+                  const error = gate3Errors[module.id];
+                  return (
+                    <div className="assembly-card" key={module.id}>
+                      <div className="assembly-card-head">
+                        <strong>{module.title}</strong>
+                        <span className="assembly-card-id">{module.id}</span>
+                      </div>
+                      <div className="stepper-actions">
+                        {verdict === null && (
+                          <span className="badge">— sin revisión</span>
+                        )}
+                        {verdict?.verdict === "APPROVED" && (
+                          <span className="badge">✅ APROBADO</span>
+                        )}
+                        {verdict?.verdict === "REJECTED" && (
+                          <span className="badge badge-error">
+                            ❌ RECHAZADO ({verdict.hallazgos.length} hallazgo
+                            {verdict.hallazgos.length === 1 ? "" : "s"})
+                          </span>
+                        )}
+                        <button
+                          className="btn btn-secondary"
+                          type="button"
+                          onClick={() => handleGate3(module.id)}
+                          disabled={running}
+                        >
+                          {running ? "Corriendo revisión…" : "Revisión de módulo"}
+                        </button>
+                      </div>
+                      {error && <p className="stepper-error-msg">{error}</p>}
+                      {verdict?.verdict === "REJECTED" &&
+                        verdict.hallazgos.length > 0 && (
+                          <details className="cuts-details">
+                            <summary>Ver hallazgos detectados</summary>
+                            <ul className="cuts-list">
+                              {verdict.hallazgos.map((h, idx) => (
+                                <li key={`${h.tipo}-${idx}`}>
+                                  {h.lessonId ? `${h.lessonId} — ` : ""}
+                                  {h.tipo} ({h.severidad}): {h.detalle}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          <section className="delivery-section">
+            <h2>Entrega</h2>
+            <p className="audit-hint">
+              Empaqueta el curso completo (renders + notas) en un único
+              directorio de entrega.
+            </p>
+            <div className="stepper-actions">
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={handlePackage}
+                disabled={!canPackage || packaging}
+                title={
+                  canPackage
+                    ? undefined
+                    : "Todavía no hay clases renderizadas para empaquetar"
+                }
+              >
+                {packaging ? "Empaquetando…" : "Empaquetar curso"}
+              </button>
+            </div>
+            {packageError && (
+              <p className="stepper-error-msg">{packageError}</p>
+            )}
+            {packageManifest && (
+              <div className="package-result">
+                <p className="assembly-card-meta">
+                  {packageManifest.courseDir}
+                </p>
+                <ul className="cuts-list">
+                  {packageManifest.lessons.map((l) => (
+                    <li key={l.lessonId}>
+                      {l.moduleId} / {l.lessonId} — {l.fileName}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
+
+          <section className="overlays-section">
+            <h2>Briefs de overlays</h2>
+            <p className="audit-hint">
+              Genera los briefs de overlays visuales (datos/hechos a resaltar
+              durante la clase) para todas las lecciones de la estructura.
+            </p>
+            <div className="stepper-actions">
+              <button
+                className="btn btn-secondary"
+                type="button"
+                onClick={handleOverlayBriefs}
+                disabled={generatingBriefs}
+              >
+                {generatingBriefs
+                  ? "Generando briefs…"
+                  : "Generar briefs de overlays"}
+              </button>
+            </div>
+            {overlayBriefsError && (
+              <p className="stepper-error-msg">{overlayBriefsError}</p>
+            )}
+            {overlayBriefs &&
+              Object.entries(overlayBriefs)
+                .filter(([, file]) => file !== null)
+                .map(([lessonId, file]) => (
+                  <details className="cuts-details" key={lessonId}>
+                    <summary>
+                      {lessonTitles.get(lessonId) ?? lessonId} (
+                      {file?.briefs.length ?? 0} brief
+                      {file?.briefs.length === 1 ? "" : "s"})
+                    </summary>
+                    <ul className="cuts-list">
+                      {file?.briefs.map((b) => (
+                        <li key={b.key}>
+                          {b.key} — {b.fact} (t={b.at_seconds}s)
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ))}
+          </section>
         </section>
       )}
     </main>
