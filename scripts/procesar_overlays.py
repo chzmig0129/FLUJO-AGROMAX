@@ -8,12 +8,15 @@ real del Gate 1).
 
 Uso: python procesar_overlays.py <jobDir>
 
-Portado de
+Portado (y luego reescrito, ver `luminance_alpha`) de
 `/Users/chavez/Documents/AGROMAX/EDITOR/overlays/procesar_ilustraciones.py`:
-flood-fill del blanco DESDE LOS BORDES (así se preserva cualquier blanco que
-quede en el INTERIOR del dibujo, por ejemplo el fondo de una tarjeta o el
-centro de una dona), trim a contenido y drop shadow suave. NO usa rembg
-(sin red neuronal de segmentación): el algoritmo es determinista y barato.
+el canal alpha se deriva directamente de la luminancia de cada pixel
+(tinta negra sobre papel claro → alpha = 1 - luminancia normalizada, con
+piso/techo que satura), en vez de un flood-fill por conectividad+umbral:
+así no depende de que el blanco esté "conectado" a un borde ni de que el
+fondo sea uniforme, lo que evita tanto motas de halo blanco como erosión
+del trazo. Trim a contenido y drop shadow suave. NO usa rembg (sin red
+neuronal de segmentación): el algoritmo es determinista y barato.
 
 ENTORNO REQUERIDO (mismo venv que gen_overlays.py):
 
@@ -21,8 +24,8 @@ ENTORNO REQUERIDO (mismo venv que gen_overlays.py):
     .venv-overlays/bin/pip install playwright pillow
 
 (numpy es dependencia transitiva habitual de Pillow en entornos con
-aceleración, pero acá se usa directamente para el flood-fill vectorizado;
-si el venv no la trae, agregarla: `pip install numpy`.)
+aceleración, pero acá se usa directamente para el modelo luminancia→alpha
+vectorizado; si el venv no la trae, agregarla: `pip install numpy`.)
 
 REANUDABLE: si `assets/overlays/final/<key>.png` ya existe para un
 `raw/<key>.jpg`, ese key se salta.
@@ -35,9 +38,20 @@ import glob
 import json
 import os
 import sys
-from collections import deque
 
-THRESH = 238  # un pixel se considera "fondo blanco" si los 3 canales >= THRESH
+# Umbrales del modelo luminancia→alpha (ver `luminance_alpha`): por debajo de
+# DARK un pixel es tinta pura (alpha=255); por encima de LIGHT es papel puro
+# (alpha=0); en el medio hay una rampa lineal (antialias suave, sin blanco
+# sólido).
+DARK = 190
+LIGHT = 248
+# Un pixel cuenta como "fondo confiable" (para estimar el piso local de papel)
+# si su luminancia cruda supera este piso. La tinta de estas ilustraciones
+# es mucho más oscura (percentiles bajos <30), así que este piso nunca
+# confunde tinta con papel.
+BG_SAMPLE_MIN = 150
+BG_SIGMA = 45  # radio (px) de la estimación de fondo por convolución normalizada
+
 GATE1_BG = (60, 70, 60)  # gris oscuro sobre el que se compone qa/gate1-chk/
 
 
@@ -46,77 +60,72 @@ def log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
-def flatten_background(rgb):
+def estimate_background(l_arr):
     """
-    Aplana el fondo casi-blanco con ruido/textura (grano de papel,
-    degradado suave, artefactos de compresión JPEG) para que el
-    flood-fill de blanco tenga una superficie realmente uniforme.
+    Estima el "piso" local de papel (luminancia de fondo) en cada pixel,
+    robusto a que ese fondo tenga viñeteado/textura Y a que esté rodeado
+    de trazos de tinta gruesos (texto denso, rótulos).
 
-    El JPG del generador no tiene un fondo blanco puro: tiene una
-    textura de papel y a veces un leve viñeteado (una esquina más
-    oscura que el resto). Con el umbral fijo THRESH, esas zonas caen
-    por debajo del umbral en un patrón moteado, lo que rompe la
-    conectividad del flood-fill y dispara dos fallas: (1) motas de
-    fondo que quedan opacas por no estar conectadas al borde, y (2)
-    con blur/threshold ingenuos, erosión que se come el dibujo.
+    NO usa un filtro de máximo/ventana fija (MaxFilter): esa técnica falla
+    justo detrás de bloques de texto anchos, porque si la ventana no
+    alcanza a "ver" papel real más allá del texto, confunde tinta con
+    fondo y el flat-field resultante queda mal calibrado ahí — esa fue la
+    causa del halo blanco moteado "detrás de los rótulos" reportado por
+    el juez.
 
-    Se estima el "piso" de fondo local con un MaxFilter (ventana mayor
-    al grosor de los trazos de tinta, así el filtro ignora los trazos
-    finos y devuelve el nivel de papel circundante) seguido de un
-    GaussianBlur para suavizar bloques JPEG, y se usa ese piso para
-    normalizar (flat-field) la luminancia: todo lo que sea papel queda
-    cerca de 255 sin importar el viñeteado/textura original, mientras
-    que la tinta (mucho más oscura que su entorno) se mantiene oscura.
+    En su lugar hace una convolución normalizada (Nadaraya-Watson): solo
+    los pixeles que ya son confiablemente papel (luminancia >= BG_SAMPLE_MIN)
+    aportan al promedio ponderado por un blur gaussiano de radio BG_SIGMA;
+    los pixeles de tinta aportan peso cero y no contaminan la estimación.
+    Como el radio es generoso, la estimación "ve más allá" de bloques de
+    texto anchos usando el papel real que los rodea, en vez de quedar
+    bloqueada por ellos.
     """
     import numpy as np
     from PIL import Image, ImageFilter
 
-    im = Image.fromarray(rgb)
-    l = im.convert("L")
-    bg_est = l.filter(ImageFilter.MaxFilter(21)).filter(ImageFilter.GaussianBlur(15))
-    bg_arr = np.clip(np.asarray(bg_est).astype(np.float32), 1, 255)
-    scale = 255.0 / bg_arr
-    flat = np.clip(rgb.astype(np.float32) * scale[:, :, None], 0, 255)
-    return flat
+    mask = l_arr >= BG_SAMPLE_MIN
+    num_u8 = (l_arr * mask).astype(np.uint8)
+    den_u8 = (mask.astype(np.uint8) * 255)
+    num_blur = Image.fromarray(num_u8, mode="L").filter(ImageFilter.GaussianBlur(BG_SIGMA))
+    den_blur = Image.fromarray(den_u8, mode="L").filter(ImageFilter.GaussianBlur(BG_SIGMA))
+    num = np.asarray(num_blur, dtype=np.float32)
+    den = np.asarray(den_blur, dtype=np.float32) / 255.0
+    bg = num / np.clip(den, 1e-3, None)
+
+    # Donde el peso es demasiado bajo (zona sin ningún pixel de fondo cerca,
+    # caso extremo), recae en la mediana global del fondo detectado.
+    weak = den < 0.05
+    if weak.any():
+        global_bg = float(np.median(l_arr[mask])) if mask.any() else 255.0
+        bg = np.where(weak, global_bg, bg)
+    return np.clip(bg, 1, 255)
 
 
-def border_flood_alpha(rgb):
+def luminance_alpha(rgb):
     """
-    Flood-fill del blanco desde los BORDES de la imagen: solo el blanco
-    conectado al borde se vuelve transparente (alpha=0). Cualquier blanco
-    interior (ej. el centro de una dona, el fondo de una tarjeta) se
-    preserva opaco (alpha=255) porque nunca fue visitado por el flood.
+    Deriva el canal alpha DIRECTAMENTE de la luminancia corregida por el
+    fondo local (ver `estimate_background`), sin flood-fill ni
+    conectividad: alpha = rampa lineal de luminancia entre DARK (tinta,
+    alpha=255) y LIGHT (papel, alpha=0).
 
-    La conectividad se calcula sobre una versión "aplanada" del fondo
-    (ver `flatten_background`) para no depender de que el JPG tenga un
-    blanco perfectamente uniforme.
+    Este modelo es el correcto para "tinta negra sobre papel claro"
+    (ver config/overlay-style.md) y es inmune tanto al ruido de fondo
+    (que ya no depende de que un pixel esté "conectado" a un borde
+    blanco, así que no quedan motas opacas sueltas) como a la erosión
+    (no hay umbral binario duro: los bordes del trazo antialiasan
+    suavemente en vez de morder el trazo o dejar halo sólido).
     """
     import numpy as np
+    from PIL import Image
 
-    h, w, _ = rgb.shape
-    flat = flatten_background(rgb)
-    white = np.all(flat >= THRESH, axis=2)
-    visited = np.zeros((h, w), bool)
-    dq = deque()
-    for x in range(w):
-        for y in (0, h - 1):
-            if white[y, x] and not visited[y, x]:
-                visited[y, x] = True
-                dq.append((y, x))
-    for y in range(h):
-        for x in (0, w - 1):
-            if white[y, x] and not visited[y, x]:
-                visited[y, x] = True
-                dq.append((y, x))
-    while dq:
-        y, x = dq.popleft()
-        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            ny, nx = y + dy, x + dx
-            if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx] and white[ny, nx]:
-                visited[ny, nx] = True
-                dq.append((ny, nx))
-    alpha = np.where(visited, 0, 255).astype(np.uint8)
-    return alpha
+    l = np.asarray(Image.fromarray(rgb).convert("L")).astype(np.float32)
+    bg = estimate_background(l)
+    scale = 255.0 / bg
+    flat = np.clip(rgb.astype(np.float32) * scale[:, :, None], 0, 255)
+    l_flat = flat.mean(axis=2)
+    alpha = np.clip((LIGHT - l_flat) / (LIGHT - DARK), 0.0, 1.0) * 255.0
+    return alpha.astype(np.uint8)
 
 
 def process_one(raw_path: str, final_path: str, gate1_chk_path: str) -> None:
@@ -125,7 +134,7 @@ def process_one(raw_path: str, final_path: str, gate1_chk_path: str) -> None:
 
     im = Image.open(raw_path).convert("RGB")
     rgb = np.asarray(im)
-    alpha = border_flood_alpha(rgb)
+    alpha = luminance_alpha(rgb)
     rgba = np.dstack([rgb, alpha])
     img = Image.fromarray(rgba, "RGBA")
 
