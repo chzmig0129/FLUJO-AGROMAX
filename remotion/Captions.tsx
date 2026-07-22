@@ -63,8 +63,6 @@ export const Captions: React.FC<CaptionsProps> = ({
   captions,
   offsetFrames,
 }) => {
-  ensurePoppinsLoaded();
-
   const frame = useCurrentFrame();
   const { height } = useVideoConfig();
 
@@ -77,9 +75,14 @@ export const Captions: React.FC<CaptionsProps> = ({
       contentFrame >= caption.startFrame && contentFrame < caption.endFrame
   );
 
-  if (!activeCaption) {
+  // Sin captions (o sin ninguno activo) no hay nada que dibujar: no se debe
+  // cargar la fuente (ver "POR QUÉ LA CARGA ES PEREZOSA" en fonts/poppins.ts)
+  // para no reintroducir contención en renders sin subtítulos.
+  if (captions.length === 0 || !activeCaption) {
     return null;
   }
+
+  ensurePoppinsLoaded();
 
   const textShadow = buildTextShadow();
 

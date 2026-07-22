@@ -77,7 +77,10 @@ export const Lesson: React.FC<LessonCompositionProps> = ({
         );
       })}
 
-      <Captions captions={captions} offsetFrames={introDurationInFrames} />
+      <Captions
+        captions={captions}
+        offsetFrames={introSrc ? introDurationInFrames : 0}
+      />
     </AbsoluteFill>
   );
 };
