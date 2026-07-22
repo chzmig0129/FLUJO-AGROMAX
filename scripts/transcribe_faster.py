@@ -17,14 +17,48 @@ Imprime a stdout UN único JSON con el contrato normalizado:
 Todo log/progreso se envía a stderr. En caso de error, exit code 1.
 """
 
+import glob
 import json
 import os
 import sys
+import sysconfig
 
 
 def log(msg: str) -> None:
     """Escribe un mensaje de progreso/diagnóstico a stderr."""
     print(msg, file=sys.stderr, flush=True)
+
+
+def register_windows_nvidia_dlls() -> None:
+    """En Windows, registra los directorios bin de los paquetes nvidia-*
+    instalados por pip dentro del venv (Lib\\site-packages\\nvidia\\<paquete>\\bin)
+    vía os.add_dll_directory, ya que ctranslate2/faster-whisper cargan
+    cublas64_12.dll y las DLLs de cudnn en runtime y pip no las deja en PATH.
+    No-op en plataformas distintas de Windows.
+    """
+    if sys.platform != "win32":
+        return
+
+    try:
+        purelib = sysconfig.get_paths()["purelib"]
+    except Exception as exc:  # noqa: BLE001 - no debe romper el arranque
+        log(f"No se pudo resolver purelib para DLLs nvidia: {exc}")
+        return
+
+    pattern = os.path.join(purelib, "nvidia", "*", "bin")
+    bin_dirs = [d for d in glob.glob(pattern) if os.path.isdir(d)]
+
+    if not bin_dirs:
+        log("No se encontraron paquetes nvidia en el venv; se usará CUDA del sistema si existe")
+        return
+
+    for bin_dir in bin_dirs:
+        try:
+            os.add_dll_directory(bin_dir)  # type: ignore[attr-defined]
+            os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+            log(f"Registrado directorio de DLLs nvidia: {bin_dir}")
+        except Exception as exc:  # noqa: BLE001 - un dir malo no debe abortar el resto
+            log(f"No se pudo registrar directorio de DLLs nvidia '{bin_dir}': {exc}")
 
 
 def main() -> None:
@@ -34,6 +68,8 @@ def main() -> None:
 
     video_path = sys.argv[1]
     language = sys.argv[2]
+
+    register_windows_nvidia_dlls()
 
     try:
         from faster_whisper import WhisperModel
