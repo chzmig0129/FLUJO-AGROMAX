@@ -18,6 +18,7 @@ Todo log/progreso se envía a stderr. En caso de error, exit code 1.
 """
 
 import json
+import os
 import sys
 
 
@@ -47,12 +48,43 @@ def main() -> None:
         log(f"Cargando modelo faster-whisper large-v3-turbo...")
         model = WhisperModel("large-v3-turbo", device="auto", compute_type="auto")
 
-        log(f"Transcribiendo '{video_path}' (idioma={language})...")
-        raw_segments, info = model.transcribe(
-            video_path,
-            language=language,
-            word_timestamps=True,
-        )
+        try:
+            batch_size = int(os.environ.get("WHISPER_BATCH_SIZE", "8"))
+        except ValueError:
+            batch_size = 8
+
+        raw_segments = None
+        info = None
+        if batch_size > 1:
+            try:
+                from faster_whisper import BatchedInferencePipeline
+
+                pipeline = BatchedInferencePipeline(model=model)
+                log(
+                    f"Transcribiendo '{video_path}' (idioma={language}, "
+                    f"batch_size={batch_size})..."
+                )
+                raw_segments, info = pipeline.transcribe(
+                    video_path,
+                    language=language,
+                    word_timestamps=True,
+                    batch_size=batch_size,
+                )
+            except Exception as exc:  # noqa: BLE001 - fallback a camino no batcheado
+                log(
+                    f"BatchedInferencePipeline no disponible/falló ({exc}); "
+                    "usando transcripción no batcheada"
+                )
+                raw_segments = None
+                info = None
+
+        if raw_segments is None:
+            log(f"Transcribiendo '{video_path}' (idioma={language})...")
+            raw_segments, info = model.transcribe(
+                video_path,
+                language=language,
+                word_timestamps=True,
+            )
 
         segments = []
         # segments es un generador: hay que consumirlo por completo

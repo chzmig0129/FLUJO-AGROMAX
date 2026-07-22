@@ -112,27 +112,50 @@ async function executePipeline(jobId: string): Promise<void> {
 }
 
 /**
- * Corre en secuencia las tres etapas deterministas de preparación (5A
- * silencio, 5B proxies, 5C cortes) sobre los clips 'leccion' de la
- * estructura del job, encadenando 'preparing' → 'prepared'. No captura
- * errores: el llamador (runPipeline o runPrepOnly) es responsable de
- * marcar el job como 'error' si algo falla acá.
+ * Corre las etapas deterministas de preparación (5A silencio, 5B proxies,
+ * 5C cortes) sobre los clips 'leccion' de la estructura del job, encadenando
+ * 'preparing' → 'prepared'. No captura errores: el llamador (runPipeline o
+ * runPrepOnly) es responsable de marcar el job como 'error' si algo falla
+ * acá.
+ *
+ * 5A (silencio) y 5B (proxies) solo LEEN source/ y structure.json y son
+ * independientes entre sí, así que corren en paralelo con Promise.all para
+ * ahorrar tiempo de pared (en OVINOS silencio tardó 39 min y proxies ~1h+
+ * corriendo en serie). 5C (cortes) depende de la salida de ambas, así que
+ * sigue corriendo después, como antes.
+ *
+ * IMPORTANTE — sin llamadas concurrentes a updateJobStatus: updateJobStatus
+ * hace read-modify-write de job.json, así que si silencio y proxies lo
+ * llamaran cada uno por su lado DENTRO del Promise.all podrían pisarse el
+ * uno al otro (race de lectura-escritura). Por eso los timestamps de
+ * startedAt/finishedAt de silence+proxies se registran en UNA sola llamada
+ * antes de lanzar el Promise.all y en UNA sola llamada después de que
+ * termina, nunca desde adentro de las dos ramas concurrentes. El finishedAt
+ * de ambas etapas usa el mismo Date.now() (tomado justo al resolver el
+ * Promise.all) aunque en la práctica una termine antes que la otra: es
+ * aceptable porque solo se usa para métricas/diagnóstico, no para lógica de
+ * negocio.
+ *
+ * Progress de prep (progress/prep-progress.json): silence-stage.ts NO
+ * escribe ese archivo (no importa writePrepProgressJson ni tiene noción de
+ * "progress"); solo proxy-stage.ts lo hace. Por lo tanto no hay colisión de
+ * escritura concurrente sobre prep-progress.json aunque las dos etapas
+ * corran en paralelo: silencio no toca ese archivo en absoluto.
  */
 async function runPrepStages(jobId: string): Promise<void> {
   await updateJobStatus(jobId, "preparing", {
-    stages: { silence: { startedAt: new Date().toISOString() } },
+    stages: {
+      silence: { startedAt: new Date().toISOString() },
+      proxies: { startedAt: new Date().toISOString() },
+    },
   });
-  await runSilenceStage(jobId);
+  await Promise.all([runSilenceStage(jobId), runProxyStage(jobId)]);
+  const prepFinishedAt = new Date().toISOString();
   await updateJobStatus(jobId, "preparing", {
-    stages: { silence: { finishedAt: new Date().toISOString() } },
-  });
-
-  await updateJobStatus(jobId, "preparing", {
-    stages: { proxies: { startedAt: new Date().toISOString() } },
-  });
-  await runProxyStage(jobId);
-  await updateJobStatus(jobId, "preparing", {
-    stages: { proxies: { finishedAt: new Date().toISOString() } },
+    stages: {
+      silence: { finishedAt: prepFinishedAt },
+      proxies: { finishedAt: prepFinishedAt },
+    },
   });
 
   await updateJobStatus(jobId, "preparing", {

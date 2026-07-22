@@ -19,10 +19,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-// ffmpeg-static exporta la ruta al binario de ffmpeg empaquetado, mismo
-// patrón que transcribe/narration.ts y frames-stage.ts: evita depender de un
-// ffmpeg instalado global.
-import ffmpegPath from "ffmpeg-static";
+import { resolveFfmpegBin } from "./ffmpeg";
 import { SILENCE_MIN_D, SILENCE_NOISE_DB, CUT_PADDING_SECONDS } from "./constants";
 import {
   readMediaJson,
@@ -110,14 +107,12 @@ async function detectSilences(
   srcFile: string,
   durationSeconds: number
 ): Promise<SilenceInterval[]> {
-  if (!ffmpegPath) {
-    throw new Error("ffmpeg-static no disponible");
-  }
+  const ffmpegBin = resolveFfmpegBin();
 
   let stdout = "";
   try {
     const result = await execFileAsync(
-      ffmpegPath,
+      ffmpegBin,
       [
         "-v",
         "error",

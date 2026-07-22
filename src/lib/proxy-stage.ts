@@ -19,9 +19,7 @@ import os from "node:os";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-// ffmpeg-static exporta la ruta al binario de ffmpeg empaquetado, mismo
-// patrón que frames-stage.ts y transcribe/narration.ts.
-import ffmpegPath from "ffmpeg-static";
+import { resolveFfmpegBin } from "./ffmpeg";
 import {
   proxiesDir,
   readStructureJson,
@@ -128,6 +126,38 @@ async function runPool<T>(
 }
 
 /**
+ * Determina los args de encoder de video según PROXY_ENCODER ('libx264' por
+ * default). 'h264_nvenc' usa el encoder acelerado por GPU (NVENC, disponible
+ * en la PC Windows con RTX 2060 vía el ffmpeg del sistema apuntado por
+ * FFMPEG_BIN); cualquier otro valor es un error explícito para no correr
+ * ffmpeg con un encoder no soportado silenciosamente.
+ */
+function resolveEncoderArgs(): string[] {
+  const raw = process.env.PROXY_ENCODER;
+  const encoder = raw === undefined || raw.trim() === "" ? "libx264" : raw;
+  if (encoder === "libx264") {
+    return ["-c:v", "libx264", "-crf", "18", "-preset", "medium"];
+  }
+  if (encoder === "h264_nvenc") {
+    return [
+      "-c:v",
+      "h264_nvenc",
+      "-preset",
+      "p5",
+      "-rc",
+      "vbr",
+      "-cq",
+      "19",
+      "-b:v",
+      "0",
+    ];
+  }
+  throw new Error(
+    `PROXY_ENCODER inválido: '${encoder}' (esperado 'libx264' o 'h264_nvenc')`
+  );
+}
+
+/**
  * Transcodifica un único clip a proxy de edición. Escribe primero a
  * <clip>.mp4.tmp y solo al terminar con éxito lo renombra a <clip>.mp4: así
  * un proceso interrumpido a mitad de camino (crash, kill, etc.) nunca deja
@@ -139,12 +169,10 @@ async function runPool<T>(
  * con -c:a aac), sin fallar el proceso.
  */
 async function transcodeClip(srcFile: string, outFile: string): Promise<void> {
-  if (!ffmpegPath) {
-    throw new Error("ffmpeg-static no disponible");
-  }
+  const ffmpegBin = resolveFfmpegBin();
   const tmpOut = `${outFile}.tmp`;
   try {
-    await execFileAsync(ffmpegPath, [
+    await execFileAsync(ffmpegBin, [
       "-y",
       "-i",
       srcFile,
@@ -152,12 +180,7 @@ async function transcodeClip(srcFile: string, outFile: string): Promise<void> {
       `scale=${PROXY_WIDTH}:${PROXY_HEIGHT}`,
       "-r",
       String(PROXY_FPS),
-      "-c:v",
-      "libx264",
-      "-crf",
-      "18",
-      "-preset",
-      "medium",
+      ...resolveEncoderArgs(),
       "-c:a",
       "aac",
       "-b:a",

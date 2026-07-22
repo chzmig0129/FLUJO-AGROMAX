@@ -18,9 +18,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-// ffmpeg-static exporta la ruta al binario de ffmpeg empaquetado, igual que
-// en transcribe/narration.ts: evita depender de un ffmpeg instalado global.
-import ffmpegPath from "ffmpeg-static";
+import { resolveFfmpegBin } from "./ffmpeg";
 import {
   framesDir,
   readFramesManifest,
@@ -140,10 +138,8 @@ async function extractFrame(
   timeSeconds: number,
   outFile: string
 ): Promise<void> {
-  if (!ffmpegPath) {
-    throw new Error("ffmpeg-static no disponible");
-  }
-  await execFileAsync(ffmpegPath, [
+  const ffmpegBin = resolveFfmpegBin();
+  await execFileAsync(ffmpegBin, [
     "-ss",
     String(timeSeconds),
     "-i",
