@@ -88,3 +88,29 @@ export const CAPTION_HIGHLIGHT = BRAND_GREEN;
 
 /** Sombra suave detrás del texto de los captions. */
 export const CAPTION_SHADOW = { blur: 10, opacity: 0.55, offsetY: 4 };
+
+/* ------------------------------------------------------------------ *
+ * Capa de overlays didácticos (remotion/Overlays.tsx)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Posición horizontal del centro del overlay, como fracción del ancho del
+ * frame. Anclado a la izquierda (0.25, no al centro) para no taparle la cara
+ * al presentador, que suele estar centrado/a la derecha en los proxies.
+ */
+export const OVERLAY_ANCHOR_X = 0.25;
+
+/** Posición vertical del centro del overlay, como fracción del alto del frame. */
+export const OVERLAY_ANCHOR_Y = 0.42;
+
+/** Ancho del overlay "cuadrado" (aspect >= 0.6), como fracción del ancho del frame. */
+export const OVERLAY_WIDTH = 0.34;
+
+/** Ancho del overlay "ancho" (aspect < 0.6, ej. 16:9), como fracción del ancho del frame. */
+export const OVERLAY_WIDTH_WIDE = 0.44;
+
+/** Duración del fade in/out de un overlay, en frames. */
+export const OVERLAY_FADE_FRAMES = 8;
+
+/** Duración fija en pantalla de un overlay, en segundos (etapa 11, overlays-timeline-stage.ts). */
+export const OVERLAY_DISPLAY_SECONDS = 8;

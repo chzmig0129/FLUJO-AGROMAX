@@ -51,6 +51,8 @@ import type {
   CaptionsFile,
   IntroProps,
   LessonAssemblyPlan,
+  OverlayTimelineFile,
+  OverlayTimelineItem,
   TimelineEntry,
 } from "./types";
 
@@ -122,6 +124,31 @@ async function readCaptionsFile(
     const raw = await fs.readFile(captionsFile, "utf8");
     const parsed = JSON.parse(raw) as CaptionsFile;
     return Array.isArray(parsed?.captions) ? parsed.captions : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Lee plan/overlays-timeline/<lessonId>.json con fs directo (mismo patrón
+ * tolerante que `readCaptionsFile`, otro worker/etapa produce ese archivo,
+ * en paralelo). Si el archivo no existe o no parsea, devuelve `[]` y el
+ * ensamblaje sigue sin overlays en vez de fallar — la etapa de timeline de
+ * overlays es best-effort respecto al ensamblaje.
+ */
+async function readOverlaysTimelineFile(
+  jobId: string,
+  lessonId: string
+): Promise<OverlayTimelineItem[]> {
+  const overlaysTimelineFile = path.join(
+    path.dirname(cutsDir(jobId)),
+    "overlays-timeline",
+    `${lessonId}.json`
+  );
+  try {
+    const raw = await fs.readFile(overlaysTimelineFile, "utf8");
+    const parsed = JSON.parse(raw) as OverlayTimelineFile;
+    return Array.isArray(parsed?.overlays) ? parsed.overlays : [];
   } catch {
     return [];
   }
@@ -253,6 +280,7 @@ export async function buildAssemblyPlans(
       const moduleLabel = `MÓDULO ${module.order} · CLASE ${lesson.order}`;
       const subtitle = lesson.segments[0]?.topic ?? "";
       const captions = await readCaptionsFile(jobId, lesson.id);
+      const overlays = await readOverlaysTimelineFile(jobId, lesson.id);
 
       planned.push({
         lessonId: lesson.id,
@@ -280,6 +308,7 @@ export async function buildAssemblyPlans(
           },
           timeline,
           captions,
+          overlays,
           expectedFrames: INTRO_DURATION_FRAMES + keepFrames,
           outputPath: renderPath(jobId, lesson.id),
           // El intro se agrega a la huella recién en assembly-stage.ts,

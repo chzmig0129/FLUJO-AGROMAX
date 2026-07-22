@@ -94,6 +94,37 @@ export interface CaptionsFile {
 }
 
 /**
+ * Un overlay didáctico ya remapeado al timeline de SALIDA de la clase, listo
+ * para dibujarse por encima del video (y por debajo de los captions).
+ * CONVENCIÓN DE FRAMES: [startFrame, endFrame) — semiabierto, relativos al
+ * primer frame de CONTENIDO (sin intro), igual que `Caption`. `file` es la
+ * ruta del PNG final relativa a `publicRoot`/`assets/` (ej.
+ * "overlays/final/mortalidad_72h.png"). `aspect` es alto/ancho real del PNG
+ * (o el estimado del brief si la sonda de la imagen falla): valores por
+ * debajo de 0.6 son overlays "anchos" (16:9), el resto se trata como
+ * "cuadrados".
+ */
+export interface OverlayTimelineItem {
+  key: string;
+  file: string;
+  startFrame: number;
+  endFrame: number;
+  aspect: number;
+}
+
+/**
+ * Forma en disco de plan/overlays-timeline/<lessonId>.json (etapa post-Gate
+ * 1, determinista — ver overlays-timeline-stage.ts). Se documenta acá,
+ * igual que `CaptionsFile`, porque es el contrato que assembly/plan.ts lee
+ * con fs directo, sin acoplarse a jobs.ts.
+ */
+export interface OverlayTimelineFile {
+  lessonId: string;
+  fps: number;
+  overlays: OverlayTimelineItem[];
+}
+
+/**
  * Props del intro de una clase (etapa 9). Son puramente de presentación:
  * salen de structure.json y no dependen de ningún backend.
  */
@@ -156,6 +187,13 @@ export interface LessonAssemblyPlan {
    * worker lo produce; su ausencia no debe romper el ensamblaje).
    */
   captions: Caption[];
+  /**
+   * Overlays didácticos de la clase, ya remapeados a frames relativos al
+   * contenido (sin intro). Vacío si no hay
+   * plan/overlays-timeline/<lessonId>.json (otro worker lo produce; su
+   * ausencia no debe romper el ensamblaje).
+   */
+  overlays: OverlayTimelineItem[];
   /** intro + Σ(endFrame - startFrame). Es el contrato de verificación. */
   expectedFrames: number;
   /** Ruta absoluta de salida final: render/<lessonId>.mp4. */
@@ -243,5 +281,16 @@ export type LessonCompositionProps = {
     startFrame: number;
     endFrame: number;
     words: Array<{ text: string; startFrame: number; endFrame: number }>;
+  }>;
+  /**
+   * Overlays didácticos de la clase, en frames relativos al primer frame de
+   * CONTENIDO (sin intro). Vacío si no hay archivo de timeline de overlays.
+   */
+  overlays: Array<{
+    key: string;
+    file: string;
+    startFrame: number;
+    endFrame: number;
+    aspect: number;
   }>;
 };

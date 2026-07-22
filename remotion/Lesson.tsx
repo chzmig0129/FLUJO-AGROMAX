@@ -28,12 +28,14 @@ import React from "react";
 import { AbsoluteFill, OffthreadVideo, Sequence, staticFile } from "remotion";
 import type { LessonCompositionProps } from "../src/lib/assembly/types";
 import { Captions } from "./Captions";
+import { Overlays } from "./Overlays";
 
 export const Lesson: React.FC<LessonCompositionProps> = ({
   introSrc,
   introDurationInFrames,
   entries,
   captions,
+  overlays,
 }) => {
   // Offset acumulado en el timeline de salida. Se calcula en el render (no
   // en un efecto) para que sea idéntico en cada frame.
@@ -76,6 +78,11 @@ export const Lesson: React.FC<LessonCompositionProps> = ({
           </Sequence>
         );
       })}
+
+      <Overlays
+        overlays={overlays}
+        offsetFrames={introSrc ? introDurationInFrames : 0}
+      />
 
       <Captions
         captions={captions}

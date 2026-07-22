@@ -212,6 +212,13 @@ export const remotionBackend: AssemblyBackend = {
           endFrame: word.endFrame,
         })),
       })),
+      overlays: plan.overlays.map((overlay) => ({
+        key: overlay.key,
+        file: toPublicUrlPath(overlay.file),
+        startFrame: overlay.startFrame,
+        endFrame: overlay.endFrame,
+        aspect: overlay.aspect,
+      })),
     };
 
     const { durationInFrames } = await renderToTemp({
