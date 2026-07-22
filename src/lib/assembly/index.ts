@@ -3,8 +3,16 @@
  *
  * El backend se elige por variable de entorno:
  *
- *   ASSEMBLY_BACKEND=remotion   (default) ensamblaje headless con Remotion
- *   ASSEMBLY_BACKEND=palmier    stub del modo de refinamiento manual futuro
+ *   ASSEMBLY_BACKEND=remotion   (default) headless/PC: corre sin UI, sirve
+ *                               para máquinas sin la app de Palmier abierta.
+ *   ASSEMBLY_BACKEND=palmier    Mac con la app de Palmier abierta y logueada;
+ *                               ensamblaje determinista vía MCP, UN job a la
+ *                               vez (no hay cola: un segundo job concurrente
+ *                               pisaría la timeline activa del primero).
+ *                               Falla temprano y con mensaje claro (ver
+ *                               palmierBackend.isAvailable()/health() en
+ *                               ./palmier/backend.ts) si la app no está
+ *                               corriendo en ese momento.
  *
  * Este es el ÚNICO lugar del código donde se nombra una implementación
  * concreta. El resto del sistema (assembly-stage.ts, las rutas de API, la
