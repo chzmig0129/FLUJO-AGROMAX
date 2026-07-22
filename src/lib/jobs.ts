@@ -18,6 +18,7 @@ import type {
   Approval,
   AssemblyProgressJson,
   AuditJson,
+  CaptionsFile,
   CutsFile,
   FramesManifest,
   JobJson,
@@ -173,6 +174,20 @@ export function cutsDir(id: string): string {
 /** Ruta absoluta a plan/cuts/<lessonId>.json de un job. */
 function cutsFilePath(id: string, lessonId: string): string {
   return path.join(cutsDir(id), `${lessonId}.json`);
+}
+
+/**
+ * Ruta absoluta al subdirectorio de captions por lección de un job (etapa
+ * post-cortes: agrupación de palabras de Whisper remapeadas al timeline de
+ * salida).
+ */
+export function captionsDir(id: string): string {
+  return path.join(planDir(id), "captions");
+}
+
+/** Ruta absoluta a plan/captions/<lessonId>.json de un job. */
+export function captionsJsonPath(id: string, lessonId: string): string {
+  return path.join(captionsDir(id), `${lessonId}.json`);
 }
 
 /** Ruta absoluta a progress/prep-progress.json de un job (etapas 5A/5B/5C). */
@@ -554,6 +569,41 @@ export async function readCutsFiles(id: string): Promise<CutsFile[]> {
 }
 
 /**
+ * Escribe (o sobrescribe) plan/captions/<lessonId>.json de un job (etapa
+ * post-cortes). El lessonId sale de `file.lessonId`. Crea plan/captions/ de
+ * forma recursiva si todavía no existe. Idempotente: sobrescribe por
+ * completo el archivo de esa lección.
+ */
+export async function writeCaptionsJson(
+  id: string,
+  file: CaptionsFile
+): Promise<void> {
+  await fs.mkdir(captionsDir(id), { recursive: true });
+  await fs.writeFile(
+    captionsJsonPath(id, file.lessonId),
+    JSON.stringify(file, null, 2),
+    "utf-8"
+  );
+}
+
+/**
+ * Lee plan/captions/<lessonId>.json de un job. Devuelve null si todavía no
+ * existe (job que aún no llegó a la etapa de captions, o lección sin
+ * archivo) en vez de lanzar un error.
+ */
+export async function readCaptionsJson(
+  id: string,
+  lessonId: string
+): Promise<CaptionsFile | null> {
+  try {
+    const raw = await fs.readFile(captionsJsonPath(id, lessonId), "utf-8");
+    return JSON.parse(raw) as CaptionsFile;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Escribe (o sobrescribe) progress/prep-progress.json de un job (etapas
  * 5A/5B/5C). Crea progress/ de forma recursiva si todavía no existe.
  */
@@ -708,6 +758,7 @@ export async function updateJobStatus(
       silence?: { startedAt?: string; finishedAt?: string };
       proxies?: { startedAt?: string; finishedAt?: string };
       cuts?: { startedAt?: string; finishedAt?: string };
+      captions?: { startedAt?: string; finishedAt?: string };
       intros?: { startedAt?: string; finishedAt?: string };
       assembly?: { startedAt?: string; finishedAt?: string };
     };
@@ -737,6 +788,10 @@ export async function updateJobStatus(
           extra.stages.proxies
         ),
         cuts: mergeStageTiming(current.stages?.cuts, extra.stages.cuts),
+        captions: mergeStageTiming(
+          current.stages?.captions,
+          extra.stages.captions
+        ),
         intros: mergeStageTiming(current.stages?.intros, extra.stages.intros),
         assembly: mergeStageTiming(
           current.stages?.assembly,

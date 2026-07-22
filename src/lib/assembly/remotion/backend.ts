@@ -202,6 +202,16 @@ export const remotionBackend: AssemblyBackend = {
         endFrame: entry.endFrame,
         hasAudio: entry.hasAudio,
       })),
+      captions: plan.captions.map((caption) => ({
+        text: caption.text,
+        startFrame: caption.startFrame,
+        endFrame: caption.endFrame,
+        words: caption.words.map((word) => ({
+          text: word.text,
+          startFrame: word.startFrame,
+          endFrame: word.endFrame,
+        })),
+      })),
     };
 
     const { durationInFrames } = await renderToTemp({

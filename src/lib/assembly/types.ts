@@ -59,6 +59,41 @@ export interface TimelineEntry {
 }
 
 /**
+ * Una palabra dentro de un caption, con su rango de frames de resalte
+ * karaoke. CONVENCIÓN DE FRAMES: [startFrame, endFrame) — semiabierto, y
+ * relativos al primer frame de CONTENIDO (sin intro), igual que `Caption`.
+ */
+export interface CaptionWord {
+  text: string;
+  startFrame: number;
+  endFrame: number;
+}
+
+/**
+ * Un subtítulo (línea/frase) con sus palabras, para el resalte karaoke
+ * word-level. CONVENCIÓN DE FRAMES: [startFrame, endFrame) — semiabierto,
+ * relativos al primer frame de CONTENIDO (sin intro).
+ */
+export interface Caption {
+  text: string;
+  startFrame: number;
+  endFrame: number;
+  words: CaptionWord[];
+}
+
+/**
+ * Forma en disco de plan/captions/<lessonId>.json (otro worker la produce).
+ * Se documenta acá porque es el contrato que assembly/plan.ts lee con fs
+ * directo, sin acoplarse a jobs.ts.
+ */
+export interface CaptionsFile {
+  lessonId: string;
+  fps: number;
+  generatedAt: string;
+  captions: Caption[];
+}
+
+/**
  * Props del intro de una clase (etapa 9). Son puramente de presentación:
  * salen de structure.json y no dependen de ningún backend.
  */
@@ -115,6 +150,12 @@ export interface LessonAssemblyPlan {
   } | null;
   /** Tramos "keep" en orden. Ya expandidos: el backend NO recalcula cortes. */
   timeline: TimelineEntry[];
+  /**
+   * Subtítulos karaoke de la clase, ya en frames relativos al contenido
+   * (sin intro). Vacío si no hay plan/captions/<lessonId>.json (otro
+   * worker lo produce; su ausencia no debe romper el ensamblaje).
+   */
+  captions: Caption[];
   /** intro + Σ(endFrame - startFrame). Es el contrato de verificación. */
   expectedFrames: number;
   /** Ruta absoluta de salida final: render/<lessonId>.mp4. */
@@ -192,5 +233,15 @@ export type LessonCompositionProps = {
     startFrame: number;
     endFrame: number;
     hasAudio: boolean;
+  }>;
+  /**
+   * Subtítulos karaoke de la clase, en frames relativos al primer frame de
+   * CONTENIDO (sin intro). Vacío si no hay archivo de captions.
+   */
+  captions: Array<{
+    text: string;
+    startFrame: number;
+    endFrame: number;
+    words: Array<{ text: string; startFrame: number; endFrame: number }>;
   }>;
 };

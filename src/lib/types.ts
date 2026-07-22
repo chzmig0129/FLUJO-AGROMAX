@@ -95,6 +95,12 @@ export interface JobJson {
     silence?: StageTiming;
     proxies?: StageTiming;
     cuts?: StageTiming;
+    /**
+     * Etapa post-cortes (dentro de 'preparing'): agrupación de las palabras
+     * de Whisper en captions remapeadas al timeline de salida
+     * (plan/captions/).
+     */
+    captions?: StageTiming;
     /** Etapa 9: render de los intros por clase (assets/intros/). */
     intros?: StageTiming;
     /** Etapa 11: ensamblaje headless por clase (render/). */
@@ -363,6 +369,43 @@ export interface CutsFile {
   fps: number;
   generatedAt: string;
   clips: CutsClip[];
+}
+
+/**
+ * Una palabra individual dentro de un Caption, ya remapeada al timeline de
+ * salida (frames relativos al PRIMER frame de contenido, es decir SIN el
+ * offset del intro — ver Caption/CaptionsFile).
+ */
+export interface CaptionWord {
+  text: string;
+  startFrame: number;
+  endFrame: number;
+}
+
+/**
+ * Un grupo de hasta CAPTION_MAX_WORDS palabras consecutivas, ya remapeadas al
+ * timeline de salida. `text` es la concatenación de `words` separadas por
+ * espacio; `startFrame`/`endFrame` son el rango [start, end) que cubre el
+ * grupo completo (igual convención semiabierta que `keep` en CutsClip).
+ */
+export interface Caption {
+  text: string;
+  startFrame: number;
+  endFrame: number;
+  words: CaptionWord[];
+}
+
+/**
+ * Representación persistida de jobs/<id>/plan/captions/<lessonId>.json
+ * (etapa post-cortes, determinista): las palabras de la transcripción de
+ * Whisper agrupadas en captions y remapeadas al timeline de salida de la
+ * clase. `fps` es el mismo fps de plan/cuts/<lessonId>.json (CutsFile).
+ */
+export interface CaptionsFile {
+  lessonId: string;
+  fps: number;
+  generatedAt: string;
+  captions: Caption[];
 }
 
 /* ------------------------------------------------------------------ *

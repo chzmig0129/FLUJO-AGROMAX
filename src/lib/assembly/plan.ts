@@ -47,6 +47,8 @@ import {
   renderPath,
 } from "../jobs";
 import type {
+  Caption,
+  CaptionsFile,
   IntroProps,
   LessonAssemblyPlan,
   TimelineEntry,
@@ -97,6 +99,31 @@ async function probeHasAudio(file: string): Promise<boolean> {
     return stdout.trim().length > 0;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Lee plan/captions/<lessonId>.json con fs directo (SIN pasar por jobs.ts,
+ * para no acoplar el planner a esos helpers: es otro worker quien produce
+ * ese archivo, en paralelo). Tolerante: si el archivo no existe o no
+ * parsea, devuelve `[]` y el ensamblaje sigue sin subtítulos en vez de
+ * fallar — la etapa de captions es best-effort respecto al ensamblaje.
+ */
+async function readCaptionsFile(
+  jobId: string,
+  lessonId: string
+): Promise<Caption[]> {
+  const captionsFile = path.join(
+    path.dirname(cutsDir(jobId)),
+    "captions",
+    `${lessonId}.json`
+  );
+  try {
+    const raw = await fs.readFile(captionsFile, "utf8");
+    const parsed = JSON.parse(raw) as CaptionsFile;
+    return Array.isArray(parsed?.captions) ? parsed.captions : [];
+  } catch {
+    return [];
   }
 }
 
@@ -225,6 +252,7 @@ export async function buildAssemblyPlans(
 
       const moduleLabel = `MÓDULO ${module.order} · CLASE ${lesson.order}`;
       const subtitle = lesson.segments[0]?.topic ?? "";
+      const captions = await readCaptionsFile(jobId, lesson.id);
 
       planned.push({
         lessonId: lesson.id,
@@ -251,6 +279,7 @@ export async function buildAssemblyPlans(
             durationInFrames: INTRO_DURATION_FRAMES,
           },
           timeline,
+          captions,
           expectedFrames: INTRO_DURATION_FRAMES + keepFrames,
           outputPath: renderPath(jobId, lesson.id),
           // El intro se agrega a la huella recién en assembly-stage.ts,

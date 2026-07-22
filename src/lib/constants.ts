@@ -69,3 +69,22 @@ export const BRAND_INK = "#08140C";
  * Más allá de esto, el archivo se considera truncado y el render FALLA.
  */
 export const RENDER_FRAME_TOLERANCE = 2;
+
+/* ------------------------------------------------------------------ *
+ * Capa de subtítulos karaoke (remotion/Captions.tsx)
+ * ------------------------------------------------------------------ */
+
+/** Tamaño de fuente de los captions, en píxeles (a PROXY_HEIGHT). */
+export const CAPTION_FONT_SIZE = 54;
+
+/** Grosor del contorno negro del texto de los captions, en píxeles. */
+export const CAPTION_OUTLINE_PX = 4;
+
+/** Centro vertical del bloque de captions, como fracción de la altura del frame. */
+export const CAPTION_CENTER_Y = 0.84;
+
+/** Color del bloque de resalte karaoke de la palabra activa (reusa la marca). */
+export const CAPTION_HIGHLIGHT = BRAND_GREEN;
+
+/** Sombra suave detrás del texto de los captions. */
+export const CAPTION_SHADOW = { blur: 10, opacity: 0.55, offsetY: 4 };

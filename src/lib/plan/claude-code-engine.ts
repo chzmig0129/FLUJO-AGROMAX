@@ -1,15 +1,18 @@
 /**
- * claude-code-engine.ts — motor de la etapa 4 que delega en el comando
- * headless `/plan-etapa4` de Claude Code (suscripción), en vez del agente
- * vía SDK de agent.ts (que exige ANTHROPIC_API_KEY). Ejecuta el CLI `claude`
- * en modo no interactivo (`-p`), esperando que la propia sesión de Claude
- * Code lea el job, razone y escriba los 4 archivos de `plan/` descritos en
- * .claude/commands/plan-etapa4.md.
+ * claude-code-engine.ts — motor genérico que delega en comandos headless de
+ * Claude Code (suscripción), en vez del agente vía SDK de agent.ts (que
+ * exige ANTHROPIC_API_KEY). Ejecuta el CLI `claude` en modo no interactivo
+ * (`-p`), esperando que la propia sesión de Claude Code lea el job, razone y
+ * escriba los archivos de salida que el comando invocado describa.
  *
- * El CLI puede salir con código 0 sin haber completado el trabajo real (por
- * ejemplo si se detuvo antes de escribir los archivos), así que además de
- * revisar el exit code verificamos en disco que `plan/structure.json` y
- * `plan/audit.json` existen y que structure.json trae al menos un módulo.
+ * `runCommandViaClaudeCode` es la función genérica (spawn + timeout +
+ * captura de stderr + taskkill en win32): la usa cualquier etapa que delegue
+ * en un comando de `.claude/commands/*.md` recibiendo el jobId como
+ * `$ARGUMENTS`. `runPlanViaClaudeCode` es el wrapper histórico de la etapa 4
+ * (`/plan-etapa4`), que además verifica en disco que la corrida produjo
+ * salidas reales, porque el CLI puede salir con código 0 sin haber
+ * completado el trabajo (por ejemplo si se detuvo antes de escribir los
+ * archivos).
  */
 
 import { spawn } from "node:child_process";
@@ -28,12 +31,14 @@ function resolveClaudeBin(): string {
   return process.env.CLAUDE_BIN ?? "claude";
 }
 
-/** Timeout máximo (en minutos) para la corrida completa del comando. */
-function resolveTimeoutMs(): number {
+/** Timeout máximo (en minutos) para la corrida completa del comando /plan-etapa4. */
+function resolvePlanTimeoutMin(): number {
   const minutes = Number(process.env.PLAN_TIMEOUT_MIN ?? "45");
-  const safeMinutes = Number.isFinite(minutes) && minutes > 0 ? minutes : 45;
-  return safeMinutes * 60 * 1000;
+  return Number.isFinite(minutes) && minutes > 0 ? minutes : 45;
 }
+
+/** Timeout por defecto (en minutos) cuando `runCommandViaClaudeCode` no recibe `timeoutMin` explícito. */
+const DEFAULT_TIMEOUT_MIN = 45;
 
 /**
  * Lista de herramientas permitidas para el CLI headless. Deliberadamente NO
@@ -100,25 +105,48 @@ function killProcessTree(pid: number | undefined, useShell: boolean): void {
   }
 }
 
+/** Opciones de `runCommandViaClaudeCode`. */
+export interface RunCommandViaClaudeCodeOptions {
+  /** Nombre del comando de `.claude/commands/<command>.md`, sin la barra inicial. */
+  command: string;
+  /** Argumentos que recibirá el comando como `$ARGUMENTS` (ej. el jobId). */
+  args?: string;
+  /** Timeout en minutos para la corrida completa. Por defecto `DEFAULT_TIMEOUT_MIN`. */
+  timeoutMin?: number;
+  /** Herramientas permitidas para el CLI headless. Por defecto `resolveAllowedTools()`. */
+  allowedTools?: string[];
+}
+
 /**
- * Corre la etapa de plan invocando `claude -p "/plan-etapa4 <jobId>"` de
- * forma headless. cwd = raíz del repo (process.cwd()), donde vive
- * .claude/commands/plan-etapa4.md, para que el CLI resuelva el comando.
+ * Corre un comando headless de Claude Code invocando
+ * `claude -p "/<command> <args>"`. cwd = raíz del repo (process.cwd()),
+ * donde vive `.claude/commands/<command>.md`, para que el CLI lo resuelva.
+ *
+ * Mecánica genérica compartida por cualquier etapa que delegue en un
+ * comando: mismo binario configurable (CLAUDE_BIN), mismas herramientas
+ * permitidas por defecto, mismo manejo de timeout con `taskkill` en win32, y
+ * misma captura de stderr. No verifica artefactos en disco — eso es
+ * responsabilidad de quien llame (cada etapa conoce sus propias salidas
+ * esperadas).
  */
-export async function runPlanViaClaudeCode(jobId: string): Promise<void> {
+export async function runCommandViaClaudeCode(
+  opts: RunCommandViaClaudeCodeOptions,
+): Promise<void> {
+  const { command, args, timeoutMin, allowedTools } = opts;
   const claudeBin = resolveClaudeBin();
   // Windows: los shims .cmd/.bat que instala npm no son ejecutables PE
   // directos, así que spawn necesita shell:true para resolverlos vía cmd.exe.
   const useShell = claudeBin.toLowerCase().endsWith(".cmd") || claudeBin.toLowerCase().endsWith(".bat");
+  const prompt = args ? `/${command} ${args}` : `/${command}`;
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
       claudeBin,
       [
         "-p",
-        `/plan-etapa4 ${jobId}`,
+        prompt,
         "--allowedTools",
-        ...resolveAllowedTools(),
+        ...(allowedTools ?? resolveAllowedTools()),
         "--output-format",
         "json",
       ],
@@ -133,14 +161,16 @@ export async function runPlanViaClaudeCode(jobId: string): Promise<void> {
     let stderr = "";
     let settled = false;
 
-    const timeoutMs = resolveTimeoutMs();
+    const safeTimeoutMin =
+      Number.isFinite(timeoutMin) && (timeoutMin as number) > 0 ? (timeoutMin as number) : DEFAULT_TIMEOUT_MIN;
+    const timeoutMs = safeTimeoutMin * 60 * 1000;
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
       killProcessTree(child.pid, useShell);
       reject(
         new Error(
-          `Etapa de plan (claude-code) excedió el timeout de ${timeoutMs / 60000} min para el job '${jobId}'`,
+          `El comando '/${command}' (claude-code) excedió el timeout de ${timeoutMs / 60000} min (args: '${args ?? ""}')`,
         ),
       );
     }, timeoutMs);
@@ -152,7 +182,7 @@ export async function runPlanViaClaudeCode(jobId: string): Promise<void> {
     child.stderr?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
       stderr += text;
-      console.error(`[plan:claude-code] ${text.trimEnd()}`);
+      console.error(`[${command}:claude-code] ${text.trimEnd()}`);
     });
 
     child.on("error", (err) => {
@@ -161,7 +191,7 @@ export async function runPlanViaClaudeCode(jobId: string): Promise<void> {
       clearTimeout(timeout);
       reject(
         new Error(
-          `Falló la etapa de plan (claude-code) para '${jobId}': no se pudo iniciar '${claudeBin}' (${err.message})`,
+          `Falló el comando '/${command}' (claude-code, args: '${args ?? ""}'): no se pudo iniciar '${claudeBin}' (${err.message})`,
         ),
       );
     });
@@ -175,7 +205,7 @@ export async function runPlanViaClaudeCode(jobId: string): Promise<void> {
         const tail = stderr.trim().slice(-2000);
         reject(
           new Error(
-            `Falló la etapa de plan (claude-code) para '${jobId}' (código ${code}): ${tail || "sin stderr"}`,
+            `Falló el comando '/${command}' (claude-code, args: '${args ?? ""}') (código ${code}): ${tail || "sin stderr"}`,
           ),
         );
         return;
@@ -184,6 +214,20 @@ export async function runPlanViaClaudeCode(jobId: string): Promise<void> {
       void stdout; // el JSON de resumen del CLI no se usa: la verificación real es en disco.
       resolve();
     });
+  });
+}
+
+/**
+ * Corre la etapa de plan invocando `/plan-etapa4 <jobId>` vía
+ * `runCommandViaClaudeCode`, y luego verifica en disco que la corrida
+ * produjo salidas reales (ver `verifyPlanOutputs`). Sin cambios de
+ * comportamiento respecto a la versión previa a la generalización del motor.
+ */
+export async function runPlanViaClaudeCode(jobId: string): Promise<void> {
+  await runCommandViaClaudeCode({
+    command: "plan-etapa4",
+    args: jobId,
+    timeoutMin: resolvePlanTimeoutMin(),
   });
 
   await verifyPlanOutputs(jobId);

@@ -11,6 +11,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { runAssemblyStage } from "./assembly-stage";
+import { runCaptionsStage } from "./captions-stage";
 import { runCutsStage } from "./cuts-stage";
 import { runFramesStage } from "./frames-stage";
 import {
@@ -162,8 +163,19 @@ async function runPrepStages(jobId: string): Promise<void> {
     stages: { cuts: { startedAt: new Date().toISOString() } },
   });
   await runCutsStage(jobId);
-  await updateJobStatus(jobId, "prepared", {
+  await updateJobStatus(jobId, "preparing", {
     stages: { cuts: { finishedAt: new Date().toISOString() } },
+  });
+
+  // Etapa post-cortes: agrupar las palabras de Whisper en captions y
+  // remapearlas al timeline de salida de cada clase (plan/captions/). Sigue
+  // en 'preparing': recién se marca 'prepared' cuando esta etapa termina.
+  await updateJobStatus(jobId, "preparing", {
+    stages: { captions: { startedAt: new Date().toISOString() } },
+  });
+  await runCaptionsStage(jobId);
+  await updateJobStatus(jobId, "prepared", {
+    stages: { captions: { finishedAt: new Date().toISOString() } },
   });
 }
 

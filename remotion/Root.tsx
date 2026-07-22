@@ -68,6 +68,7 @@ export const RemotionRoot: React.FC = () => {
             introSrc: null,
             introDurationInFrames: INTRO_DURATION_FRAMES,
             entries: [],
+            captions: [],
           } satisfies LessonCompositionProps
         }
       />
