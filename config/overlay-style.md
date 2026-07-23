@@ -26,7 +26,11 @@ resolución. El texto que aparezca debe estar en ESPAÑOL correcto y bien
 escrito, con letra de mano LEGIBLE estilo hand-lettering, en tinta negra
 gruesa o dentro de un recuadro dibujado a mano. IMPORTANTE: nunca texto
 gris tenue ni delgado flotando sobre el fondo, siempre trazo grueso y
-legible.
+legible. Vocabulario visual obligatorio: la marca de aprobación SIEMPRE se
+dibuja como una marca de verificación (checkmark ✓) trazada a mano, y la
+marca de rechazo SIEMPRE como una cruz (X) trazada a mano. NUNCA dibujar
+animales que no sean el tema de la lección; en particular NUNCA una paloma
+ni ningún ave para representar aprobación o un "visto bueno".
 ```
 
 ## Reglas que se desprenden de este STYLE (para quien escriba prompts)
@@ -51,7 +55,16 @@ legible.
    - NUNCA texto gris tenue ni delgado flotando sobre el fondo blanco.
 5. **Números y datos**: se CONSERVA la regla de que deben ser grandes y
    protagonistas de la ilustración, dibujados a mano con trazo grueso.
-6. Este bloque de estilo es fijo e igual para todos los overlays del
+6. **Vocabulario visual de aprobación/rechazo**: la marca de aprobación
+   SIEMPRE se describe y dibuja como una marca de verificación (checkmark
+   ✓) trazada a mano; la marca de rechazo SIEMPRE como una cruz (X) trazada
+   a mano. Prohibición dura: NUNCA dibujar animales que no sean el tema de
+   la lección; en particular NUNCA una paloma ni ningún ave para
+   representar aprobación o un "visto bueno". Quien escriba el `prompt` del
+   brief (etapa 7) debe evitar la palabra "palomita" (ambigua: en México
+   significa checkmark, pero literalmente es un ave) y usar siempre "marca
+   de verificación" o "checkmark" en su lugar.
+7. Este bloque de estilo es fijo e igual para todos los overlays del
    pipeline: no se parafrasea, no se recorta, no se le agregan adjetivos
    nuevos. El `prompt` de cada brief (etapa 7) describe únicamente QUÉ se
    dibuja (figuras, textos exactos entre comillas, disposición); el CÓMO
