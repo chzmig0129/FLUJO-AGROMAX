@@ -20,8 +20,10 @@
  * queda por encima de la altura de la cabeza del presentador (que ocupa el
  * centro y los dos tercios inferiores del frame). El ancho de display es
  * OVERLAY_WIDTH_FRACTION del ancho del canvas (antes ocupaba más y tapaba la
- * cara al gesticular) y el alto es automático (la imagen conserva su propio
- * aspect ratio, `overlay.aspect` = alto/ancho real del PNG). La opacidad
+ * cara al gesticular), salvo que ese ancho produzca un alto mayor a
+ * OVERLAY_MAX_HEIGHT_FRACTION del canvas (FLUJO-AGROMAX-p8x) — en ese caso
+ * (overlays verticales) el tamaño se recalcula desde el alto máximo,
+ * conservando `overlay.aspect` = alto/ancho real del PNG. La opacidad
  * hace fade in/out de OVERLAY_FADE_FRAMES en los bordes de su rango de
  * vida, clampeado para no invertirse en overlays muy cortos.
  *
@@ -59,6 +61,13 @@ const OVERLAY_MARGIN_Y = 0.045;
 
 /** Ancho de display del overlay, como fracción del ancho del canvas (~28%, antes 0.34-0.44). */
 const OVERLAY_WIDTH_FRACTION = 0.28;
+
+/** Alto máximo de display del overlay, como fracción del alto del canvas (FLUJO-AGROMAX-p8x):
+ * los overlays con aspect vertical (formularios altos, 3+ renglones) se recalculan desde este
+ * límite en vez de desde OVERLAY_WIDTH_FRACTION, para no extenderse hacia la zona del
+ * instructor (centro y dos tercios inferiores del frame). Los overlays anchos/cuadrados nunca
+ * lo alcanzan y quedan al 28% de ancho como antes. */
+const OVERLAY_MAX_HEIGHT_FRACTION = 0.42;
 
 /* ------------------------------------------------------------------ *
  * Placa blanca semiopaca detrás de cada overlay (legibilidad sobre
@@ -162,12 +171,20 @@ export const Overlays: React.FC<OverlaysProps> = ({ overlays, offsetFrames }) =>
   return (
     <AbsoluteFill style={{ pointerEvents: "none" }}>
       {active.map((overlay) => {
-        const displayWidth = OVERLAY_WIDTH_FRACTION * width;
-        // `aspect` es alto/ancho real del PNG (ver assembly/types.ts): el
-        // <Img> conserva su propio aspect ratio con height: "auto", así que
-        // el alto renderizado real es displayWidth * aspect. La placa se
-        // dimensiona a ese box exacto (no al canvas), + padding.
-        const displayHeight = displayWidth * overlay.aspect;
+        // `aspect` es alto/ancho real del PNG (ver assembly/types.ts). Punto
+        // de partida: ancho fijo a OVERLAY_WIDTH_FRACTION del canvas, alto
+        // derivado (displayWidth * aspect). Si ese alto supera
+        // OVERLAY_MAX_HEIGHT_FRACTION*height (overlay vertical), se
+        // recalcula al revés desde el alto máximo — el ancho se reduce en
+        // consecuencia para conservar el aspect ratio del PNG. La placa se
+        // dimensiona al box resultante (no al canvas), + padding.
+        let displayWidth = OVERLAY_WIDTH_FRACTION * width;
+        let displayHeight = displayWidth * overlay.aspect;
+        const maxHeight = OVERLAY_MAX_HEIGHT_FRACTION * height;
+        if (displayHeight > maxHeight) {
+          displayHeight = maxHeight;
+          displayWidth = displayHeight / overlay.aspect;
+        }
         // Misma opacidad para la placa y el PNG: comparten enter/exit
         // exactamente, sin desfase.
         const opacity = overlayOpacity(contentFrame, overlay.startFrame, overlay.endFrame);
@@ -202,7 +219,7 @@ export const Overlays: React.FC<OverlaysProps> = ({ overlays, offsetFrames }) =>
                 left: left + platePadding,
                 top: top + platePadding,
                 width: displayWidth,
-                height: "auto",
+                height: displayHeight,
                 opacity,
               }}
             />
