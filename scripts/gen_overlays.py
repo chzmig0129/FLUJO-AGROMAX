@@ -55,6 +55,21 @@ CDP = "http://localhost:9222"
 GEN_TIMEOUT = 180  # segundos de espera por imagen generada
 
 
+def resolve_endpoints() -> list:
+    """
+    Lista ordenada de endpoints CDP: CDP_ENDPOINTS (env, separado por comas)
+    si está definida; si no, el CDP único de siempre. El primero es el
+    endpoint primario, el resto son respaldos en orden (otras cuentas de
+    ChatGPT en otra ventana/perfil de Chrome) a usar solo cuando el
+    anterior se agota ("no image (límite o UI)").
+    """
+    raw = os.environ.get("CDP_ENDPOINTS")
+    if not raw:
+        return [CDP]
+    endpoints = [e.strip() for e in raw.split(",") if e.strip()]
+    return endpoints or [CDP]
+
+
 def log(msg: str) -> None:
     """Escribe un mensaje de progreso/diagnóstico a stderr."""
     print(msg, file=sys.stderr, flush=True)
@@ -159,6 +174,46 @@ def save_src(page, src, out):
     )
 
 
+def connect_endpoint(p, endpoint):
+    """
+    Conecta por CDP a `endpoint`, elige la pestaña de chatgpt.com (o crea
+    una) y la trae al frente. Lanza excepción si la conexión falla — el
+    llamador decide cómo tratarlo (CDP_UNAVAILABLE / probar el siguiente).
+    """
+    browser = p.chromium.connect_over_cdp(endpoint)
+    ctx = browser.contexts[0]
+    page = next((pg for pg in ctx.pages if "chatgpt.com" in pg.url), None) or (
+        ctx.pages[0] if ctx.pages else ctx.new_page()
+    )
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+    return browser, ctx, page
+
+
+def try_next_endpoint(p, endpoints, exhausted, from_idx):
+    """
+    Intenta conectarse, en orden, a los endpoints desde `from_idx` en
+    adelante que no estén ya marcados como agotados. Devuelve
+    (idx, browser, ctx, page) del primero que conecte, o None si ninguno
+    lo logra (y los marca como agotados para no reintentarlos).
+    """
+    idx = from_idx
+    while idx < len(endpoints):
+        if idx in exhausted:
+            idx += 1
+            continue
+        try:
+            browser, ctx, page = connect_endpoint(p, endpoints[idx])
+            return idx, browser, ctx, page
+        except Exception as err:
+            log(f"CDP_UNAVAILABLE: no se pudo conectar a {endpoints[idx]} ({err})")
+            exhausted.add(idx)
+            idx += 1
+    return None
+
+
 def new_chat(page):
     if "chatgpt.com" not in page.url:
         page.evaluate("()=>window.location.assign('https://chatgpt.com/')")
@@ -239,35 +294,55 @@ def main() -> None:
         log(f"CDP_UNAVAILABLE: falta playwright en el entorno Python ({err})")
         sys.exit(2)
 
+    endpoints = resolve_endpoints()
+    exhausted = set()
+
     try:
         with sync_playwright() as p:
-            try:
-                browser = p.chromium.connect_over_cdp(CDP)
-            except Exception as err:
-                log(f"CDP_UNAVAILABLE: no se pudo conectar a {CDP} ({err})")
+            result = try_next_endpoint(p, endpoints, exhausted, 0)
+            if result is None:
                 sys.exit(2)
-
-            ctx = browser.contexts[0]
-            page = next((pg for pg in ctx.pages if "chatgpt.com" in pg.url), None) or (
-                ctx.pages[0] if ctx.pages else ctx.new_page()
-            )
-            try:
-                page.bring_to_front()
-            except Exception:
-                pass
+            current_idx, browser, ctx, page = result
 
             for key, brief, out in pending:
                 full_prompt = f"{brief.get('prompt', '')} {style}"
-                try:
-                    log(f"→ {key} ...")
-                    gen(page, full_prompt, out)
-                    log(f"  OK {out}")
-                    generadas += 1
-                except SystemExit:
-                    raise
-                except Exception as err:
-                    log(f"  FALLO {key}: {err}")
-                    fallidas.append({"key": key, "error": str(err)})
+                while True:
+                    try:
+                        log(f"→ {key} (endpoint {current_idx}: {endpoints[current_idx]}) ...")
+                        gen(page, full_prompt, out)
+                        log(f"  OK {out}")
+                        generadas += 1
+                        break
+                    except SystemExit:
+                        raise
+                    except RuntimeError as err:
+                        if "límite" not in str(err):
+                            log(f"  FALLO {key}: {err}")
+                            fallidas.append({"key": key, "error": str(err)})
+                            break
+                        exhausted.add(current_idx)
+                        next_result = try_next_endpoint(
+                            p, endpoints, exhausted, current_idx + 1
+                        )
+                        if next_result is None:
+                            log(
+                                f"  FALLO {key}: {err} "
+                                f"(todos los endpoints CDP agotados)"
+                            )
+                            fallidas.append({"key": key, "error": str(err)})
+                            break
+                        next_idx, browser, ctx, page = next_result
+                        log(
+                            f"CAMBIO DE CUENTA: endpoint {current_idx} agotado, "
+                            f"pasando a endpoint {next_idx}"
+                        )
+                        current_idx = next_idx
+                        # reintentar el mismo overlay en el endpoint nuevo
+                        continue
+                    except Exception as err:
+                        log(f"  FALLO {key}: {err}")
+                        fallidas.append({"key": key, "error": str(err)})
+                        break
                 page.wait_for_timeout(4000)
     except SystemExit:
         raise
