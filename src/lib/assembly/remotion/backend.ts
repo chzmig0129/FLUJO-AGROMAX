@@ -96,6 +96,41 @@ function toPublicUrlPath(relPath: string): string {
 }
 
 /**
+ * Opciones de renderMedia configurables por env, pensadas para blindar contra
+ * caídas del compositor en clases largas (muchos assets: overlays PNG +
+ * captions + audio). Sin estas, el timeout por defecto de Remotion (30s) se
+ * agota esperando el proxy de OffthreadVideo en videos largos, y una
+ * concurrencia alta (= f(cores)) puede reventar la pestaña del compositor por
+ * presión de memoria en máquinas modestas. Se usan tanto para el render de la
+ * clase como para el del intro.
+ */
+function buildRenderMediaTuning(): {
+  timeoutInMilliseconds: number;
+  concurrency?: number;
+  offthreadVideoCacheSizeInBytes?: number;
+} {
+  const timeoutInMilliseconds = Number(process.env.REMOTION_TIMEOUT_MS) || 120_000;
+
+  const tuning: {
+    timeoutInMilliseconds: number;
+    concurrency?: number;
+    offthreadVideoCacheSizeInBytes?: number;
+  } = { timeoutInMilliseconds };
+
+  if (process.env.REMOTION_CONCURRENCY) {
+    tuning.concurrency = Number(process.env.REMOTION_CONCURRENCY);
+  }
+
+  if (process.env.REMOTION_OFFTHREAD_CACHE_BYTES) {
+    tuning.offthreadVideoCacheSizeInBytes = Number(
+      process.env.REMOTION_OFFTHREAD_CACHE_BYTES
+    );
+  }
+
+  return tuning;
+}
+
+/**
  * Renderiza una composición al .tmp de `outputPath`. No verifica ni
  * promueve: eso lo hace el llamador con verify.ts.
  */
@@ -128,6 +163,7 @@ async function renderToTemp(options: {
       // fueran mudos: así ningún consumidor posterior (overlays, subtítulos,
       // concatenaciones) se topa con un MP4 sin audio.
       enforceAudioTrack: true,
+      ...buildRenderMediaTuning(),
       onProgress: ({ renderedFrames }) => {
         options.onProgress?.({
           frame: renderedFrames,
