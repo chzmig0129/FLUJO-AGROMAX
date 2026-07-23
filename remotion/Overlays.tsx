@@ -14,13 +14,16 @@
  * useCurrentFrame() con un filtro lineal — nada de useEffect ni useState,
  * mismo principio que Captions.tsx y el cursor del timeline de Lesson.tsx.
  *
- * ANCLAJE IZQUIERDA + FADE: cada overlay se centra en
- * (OVERLAY_ANCHOR_X*width, OVERLAY_ANCHOR_Y*height) para no taparle la cara
- * al presentador, con un ancho fijo según su aspecto (OVERLAY_WIDTH_WIDE
- * para imágenes anchas tipo 16:9, OVERLAY_WIDTH para el resto) y alto
- * automático (la imagen conserva su propio aspect ratio). La opacidad hace
- * fade in/out de OVERLAY_FADE_FRAMES en los bordes de su rango de vida,
- * clampeado para no invertirse en overlays muy cortos.
+ * ANCLAJE ESQUINA SUPERIOR IZQUIERDA + FADE (FLUJO-AGROMAX-r8q): el overlay
+ * ya no se centra sobre un punto — se ancla por su esquina superior
+ * izquierda a (OVERLAY_MARGIN_X*width, OVERLAY_MARGIN_Y*height), es decir,
+ * queda por encima de la altura de la cabeza del presentador (que ocupa el
+ * centro y los dos tercios inferiores del frame). El ancho de display es
+ * OVERLAY_WIDTH_FRACTION del ancho del canvas (antes ocupaba más y tapaba la
+ * cara al gesticular) y el alto es automático (la imagen conserva su propio
+ * aspect ratio, `overlay.aspect` = alto/ancho real del PNG). La opacidad
+ * hace fade in/out de OVERLAY_FADE_FRAMES en los bordes de su rango de
+ * vida, clampeado para no invertirse en overlays muy cortos.
  *
  * ORDEN EN Lesson.tsx: se monta ENTRE el video y `Captions` — los captions
  * siempre quedan encima, nunca tapados por un overlay.
@@ -35,13 +38,27 @@ import {
   useVideoConfig,
 } from "remotion";
 import type { LessonCompositionProps } from "../src/lib/assembly/types";
-import {
-  OVERLAY_ANCHOR_X,
-  OVERLAY_ANCHOR_Y,
-  OVERLAY_FADE_FRAMES,
-  OVERLAY_WIDTH,
-  OVERLAY_WIDTH_WIDE,
-} from "../src/lib/constants";
+import { OVERLAY_FADE_FRAMES } from "../src/lib/constants";
+
+/* ------------------------------------------------------------------ *
+ * Anclaje y tamaño del overlay (FLUJO-AGROMAX-r8q). Locales a este
+ * componente: la esquina/margen/ancho son una decisión de layout de la capa
+ * de Remotion, no compartida con el pipeline de Palmier
+ * (src/lib/assembly/palmier/overlays.ts sigue su propia constante).
+ * ------------------------------------------------------------------ */
+
+/** Esquina de anclaje del overlay: superior izquierda, para no taparle la
+ * cara al presentador (que ocupa el centro y los dos tercios inferiores). */
+const OVERLAY_CORNER: "top-left" = "top-left";
+
+/** Margen horizontal desde el borde izquierdo, como fracción del ancho del canvas (~4.5%). */
+const OVERLAY_MARGIN_X = 0.045;
+
+/** Margen vertical desde el borde superior, como fracción del alto del canvas (~4.5%). */
+const OVERLAY_MARGIN_Y = 0.045;
+
+/** Ancho de display del overlay, como fracción del ancho del canvas (~28%, antes 0.34-0.44). */
+const OVERLAY_WIDTH_FRACTION = 0.28;
 
 /* ------------------------------------------------------------------ *
  * Placa blanca semiopaca detrás de cada overlay (legibilidad sobre
@@ -145,8 +162,7 @@ export const Overlays: React.FC<OverlaysProps> = ({ overlays, offsetFrames }) =>
   return (
     <AbsoluteFill style={{ pointerEvents: "none" }}>
       {active.map((overlay) => {
-        const displayWidth =
-          (overlay.aspect < 0.6 ? OVERLAY_WIDTH_WIDE : OVERLAY_WIDTH) * width;
+        const displayWidth = OVERLAY_WIDTH_FRACTION * width;
         // `aspect` es alto/ancho real del PNG (ver assembly/types.ts): el
         // <Img> conserva su propio aspect ratio con height: "auto", así que
         // el alto renderizado real es displayWidth * aspect. La placa se
@@ -155,15 +171,19 @@ export const Overlays: React.FC<OverlaysProps> = ({ overlays, offsetFrames }) =>
         // Misma opacidad para la placa y el PNG: comparten enter/exit
         // exactamente, sin desfase.
         const opacity = overlayOpacity(contentFrame, overlay.startFrame, overlay.endFrame);
+        // Anclaje por esquina superior izquierda (OVERLAY_CORNER): sin
+        // `transform: translate(...)`, el borde superior izquierdo de la
+        // placa/PNG queda exactamente en (left, top).
+        const left = width * OVERLAY_MARGIN_X;
+        const top = height * OVERLAY_MARGIN_Y;
 
         return (
           <React.Fragment key={`${overlay.key}-${overlay.startFrame}`}>
             <div
               style={{
                 position: "absolute",
-                left: width * OVERLAY_ANCHOR_X,
-                top: height * OVERLAY_ANCHOR_Y,
-                transform: "translate(-50%, -50%)",
+                left,
+                top,
                 width: displayWidth + platePadding * 2,
                 height: displayHeight + platePadding * 2,
                 borderRadius: plateRadius,
@@ -176,9 +196,11 @@ export const Overlays: React.FC<OverlaysProps> = ({ overlays, offsetFrames }) =>
               src={staticFile(overlay.file)}
               style={{
                 position: "absolute",
-                left: width * OVERLAY_ANCHOR_X,
-                top: height * OVERLAY_ANCHOR_Y,
-                transform: "translate(-50%, -50%)",
+                // La placa tiene padding alrededor del PNG: el PNG se
+                // desplaza `platePadding` desde la esquina de la placa para
+                // quedar centrado dentro de ella.
+                left: left + platePadding,
+                top: top + platePadding,
                 width: displayWidth,
                 height: "auto",
                 opacity,
