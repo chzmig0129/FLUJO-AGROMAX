@@ -32,6 +32,18 @@ import type { FileTranscriptStatus, ProgressJson } from "./types";
 const execFileAsync = promisify(execFile);
 
 /**
+ * ffmpeg autorrota el video antes de aplicar -vf según su display matrix.
+ * Escalamos ese cuadro ya orientado sin deformarlo, completamos el lienzo
+ * exacto del proxy con padding centrado y normalizamos el SAR. Así un clip
+ * vertical queda upright con pillarbox, mientras un 16:9 ocupa todo el frame.
+ */
+const proxyVideoFilter = [
+  `scale=${PROXY_WIDTH}:${PROXY_HEIGHT}:force_original_aspect_ratio=decrease`,
+  `pad=${PROXY_WIDTH}:${PROXY_HEIGHT}:(ow-iw)/2:(oh-ih)/2`,
+  "setsar=1",
+].join(",");
+
+/**
  * Cantidad de transcodes concurrentes. El transcode con libx264 es CPU-bound
  * (no I/O-bound como la transcripción o el probing), así que no conviene
  * saturar todos los núcleos: por defecto se deja al menos 2 núcleos libres
@@ -177,7 +189,7 @@ async function transcodeClip(srcFile: string, outFile: string): Promise<void> {
       "-i",
       srcFile,
       "-vf",
-      `scale=${PROXY_WIDTH}:${PROXY_HEIGHT}`,
+      proxyVideoFilter,
       "-r",
       String(PROXY_FPS),
       ...resolveEncoderArgs(),
