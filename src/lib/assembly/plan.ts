@@ -104,6 +104,15 @@ async function probeHasAudio(file: string): Promise<boolean> {
   }
 }
 
+/** Ruta absoluta a plan/captions/<lessonId>.json. */
+function captionsFilePath(jobId: string, lessonId: string): string {
+  return path.join(
+    path.dirname(cutsDir(jobId)),
+    "captions",
+    `${lessonId}.json`
+  );
+}
+
 /**
  * Lee plan/captions/<lessonId>.json con fs directo (SIN pasar por jobs.ts,
  * para no acoplar el planner a esos helpers: es otro worker quien produce
@@ -115,18 +124,22 @@ async function readCaptionsFile(
   jobId: string,
   lessonId: string
 ): Promise<Caption[]> {
-  const captionsFile = path.join(
-    path.dirname(cutsDir(jobId)),
-    "captions",
-    `${lessonId}.json`
-  );
   try {
-    const raw = await fs.readFile(captionsFile, "utf8");
+    const raw = await fs.readFile(captionsFilePath(jobId, lessonId), "utf8");
     const parsed = JSON.parse(raw) as CaptionsFile;
     return Array.isArray(parsed?.captions) ? parsed.captions : [];
   } catch {
     return [];
   }
+}
+
+/** Ruta absoluta a plan/overlays-timeline/<lessonId>.json. */
+function overlaysTimelineFilePath(jobId: string, lessonId: string): string {
+  return path.join(
+    path.dirname(cutsDir(jobId)),
+    "overlays-timeline",
+    `${lessonId}.json`
+  );
 }
 
 /**
@@ -140,13 +153,11 @@ async function readOverlaysTimelineFile(
   jobId: string,
   lessonId: string
 ): Promise<OverlayTimelineItem[]> {
-  const overlaysTimelineFile = path.join(
-    path.dirname(cutsDir(jobId)),
-    "overlays-timeline",
-    `${lessonId}.json`
-  );
   try {
-    const raw = await fs.readFile(overlaysTimelineFile, "utf8");
+    const raw = await fs.readFile(
+      overlaysTimelineFilePath(jobId, lessonId),
+      "utf8"
+    );
     const parsed = JSON.parse(raw) as OverlayTimelineFile;
     return Array.isArray(parsed?.overlays) ? parsed.overlays : [];
   } catch {
@@ -156,10 +167,11 @@ async function readOverlaysTimelineFile(
 
 /**
  * Huella de las entradas de una clase: mtime+tamaño de cada proxy usado, del
- * archivo de cortes y del intro. Es lo que permite que un re-run salte las
- * clases ya renderizadas SIN re-transcodificar ni re-cortar, pero vuelva a
- * renderizar en cuanto una entrada real cambió (por ejemplo tras re-correr
- * la preparación con otro `kind`).
+ * archivo de cortes, captions, timeline/PNG de overlays y del intro. Es lo
+ * que permite que un re-run salte las clases ya renderizadas SIN
+ * re-transcodificar ni re-cortar, pero vuelva a renderizar en cuanto una
+ * entrada real cambió (por ejemplo tras re-correr la preparación con otro
+ * `kind`).
  */
 async function fingerprintSources(
   files: string[]
@@ -272,15 +284,21 @@ export async function buildAssemblyPlans(
         0
       );
 
+      const captions = await readCaptionsFile(jobId, lesson.id);
+      const overlays = await readOverlaysTimelineFile(jobId, lesson.id);
+      const overlayFiles = overlays.map((overlay) =>
+        path.join(publicRoot, overlay.file)
+      );
       const fingerprint = await fingerprintSources([
         ...usedProxies,
         path.join(cutsDir(jobId), `${lesson.id}.json`),
+        captionsFilePath(jobId, lesson.id),
+        overlaysTimelineFilePath(jobId, lesson.id),
+        ...overlayFiles,
       ]);
 
       const moduleLabel = `MÓDULO ${module.order} · CLASE ${lesson.order}`;
       const subtitle = lesson.segments[0]?.topic ?? "";
-      const captions = await readCaptionsFile(jobId, lesson.id);
-      const overlays = await readOverlaysTimelineFile(jobId, lesson.id);
 
       planned.push({
         lessonId: lesson.id,
