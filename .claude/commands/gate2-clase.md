@@ -32,9 +32,19 @@ Lee, en este orden, con la herramienta Read:
    }
    ```
 
-2. `jobs/<jobId>/plan/captions/<lessonId>.json` — el `CaptionsFile` de esta lección (contrato: `{lessonId, fps, generatedAt, captions: [{text, startFrame, endFrame, words}]}`). Lo usas como referencia exacta de qué texto DEBE verse en pantalla en cada instante — necesitas `fps` para convertir `startFrame`/`endFrame` a segundos (`frame / fps`) y así saber qué caption le toca a cada `timeSeconds` del manifest. **También es la referencia para el checklist de frames `overlay`**: el caption activo en el `timeSeconds` de ese overlay es "de lo que está hablando" el instructor en ese momento.
+2. `jobs/<jobId>/plan/captions/<lessonId>.json` — el `CaptionsFile` de esta lección (contrato: `{lessonId, fps, generatedAt, captions: [{text, startFrame, endFrame, words}]}`). Lo usas como referencia exacta de qué texto DEBE verse en pantalla en cada instante. Los frames de captions y overlays están expresados respecto al contenido, pero `timeSeconds` del manifest está expresado respecto al render final e incluye el intro; aplica obligatoriamente el contrato temporal descrito abajo antes de buscar el caption activo. **También es la referencia para el checklist de frames `overlay`**: el caption activo en el tiempo de contenido de ese overlay es "de lo que está hablando" el instructor en ese momento.
 3. `config/glosario.md` (raíz del repo) — glosario semilla de ortografía del dominio. Si no existe, sigue solo con tu propio criterio.
 4. `jobs/<jobId>/plan/glosario.md` — glosario específico de este job, si existe.
+
+### Contrato temporal del intro (obligatorio)
+
+- `manifest.frames[].timeSeconds` es tiempo del **render final** (`renderTime`), que ya incluye el intro.
+- `captions[].startFrame`/`endFrame` y los overlays son relativos al **contenido**, sin intro.
+- Calcula `introSeconds = INTRO_DURATION_FRAMES / fps`. Con el valor actual: `150 frames / 30 fps = 5 s`.
+- Antes de cotejar cualquier frame posterior al intro contra captions u overlays, calcula siempre `contentTime = timeSeconds - introSeconds`. Busca el caption activo comparando `contentTime` contra `startFrame / fps` y `endFrame / fps`.
+- La fórmula equivalente es `renderTime = introSeconds + contentFrame / fps`. Ejemplo: un caption que inicia en el frame de contenido 300 a 30 fps empieza en `contentTime = 10 s` y debe verse alrededor de `renderTime = 5 s + 10 s = 15 s`; para un frame del manifest en `timeSeconds = 15 s`, compáralo contra captions usando `contentTime = 10 s`.
+- Los frames `kind: "intro"` se evalúan por separado en la línea de tiempo del render: no les restes el intro ni intentes asignarles un caption del contenido.
+- Si el supuesto desfase entre el frame visible y el caption esperado es exactamente de 5 segundos, trátalo primero como señal probable de que se comparó `timeSeconds` sin restar el intro. No reportes un defecto hasta repetir el cotejo con `contentTime`.
 
 ## 2. Mirar cada frame
 
@@ -44,16 +54,16 @@ Para CADA entrada de `frames` en el manifest, usa Read sobre `jobs/<jobId>/qa/ga
 
 Para cada frame, evalúa:
 
-1. **Subtítulo legible**: si a ese `timeSeconds` debería haber un caption visible (según el cálculo de frame → segundos del paso 1.2), confirma que el texto se ve nítido, con buen contraste, sin cortarse en los bordes.
+1. **Subtítulo legible**: si a ese `contentTime` debería haber un caption visible (según el contrato temporal del paso 1), confirma que el texto se ve nítido, con buen contraste, sin cortarse en los bordes.
 2. **Letras no fusionadas**: que las letras del subtítulo no se vean pegadas/superpuestas entre sí (defecto típico de render de texto).
-3. **Bien escrito — cotejado contra el caption esperado**: calcula qué caption corresponde a ese `timeSeconds` (por rango `startFrame`/`endFrame` convertido a segundos) y compara el texto que ves en el frame contra `caption.text` de ese JSON, apoyándote en el glosario para dudas de ortografía técnica. **REGLA DE COSTO** (no negociable): si un texto se ve dudoso o borroso en el thumbnail, NO reportes un defecto de ortografía sin antes cotejarlo contra el caption esperado en el JSON — los thumbnails de baja resolución dan falsos positivos de ortografía. Solo reporta defecto de subtítulo si el texto en pantalla realmente difiere del `caption.text` esperado (o si el `caption.text` esperado en sí tiene un error, lo cual ya debería haber sido corregido en la etapa de auditoría de subtítulos, pero repórtalo igual si lo notas).
+3. **Bien escrito — cotejado contra el caption esperado**: calcula qué caption corresponde a ese `contentTime` (por rango `startFrame`/`endFrame` convertido a segundos) y compara el texto que ves en el frame contra `caption.text` de ese JSON, apoyándote en el glosario para dudas de ortografía técnica. **REGLA DE COSTO** (no negociable): si un texto se ve dudoso o borroso en el thumbnail, NO reportes un defecto de ortografía sin antes cotejarlo contra el caption esperado en el JSON — los thumbnails de baja resolución dan falsos positivos de ortografía. Solo reporta defecto de subtítulo si el texto en pantalla realmente difiere del `caption.text` esperado (o si el `caption.text` esperado en sí tiene un error, lo cual ya debería haber sido corregido en la etapa de auditoría de subtítulos, pero repórtalo igual si lo notas).
 4. **El subtítulo no tapa la cara**: el bloque de texto no debe superponerse a la cara/cabeza del instructor en el frame.
 5. **Sin frames negros/congelados/cortados**: la imagen no debe estar completamente negra, ni mostrar un artefacto de corte abrupto (franjas negras grandes, imagen partida a la mitad, etc.). "Congelado" no se puede confirmar con un solo frame aislado — si dudas, no lo reportes como bloqueante, repórtalo como menor si el frame se ve claramente anómalo respecto a los demás.
 6. **Overlays/logo (capas futuras)**: si el frame muestra algún overlay o logo superpuesto, confirma que no tapa ni la cara ni el subtítulo. Si no hay overlays visibles en este job todavía, no aplica — no lo reportes.
 
 ### Checklist adicional por tipo de frame (`kind`)
 
-- **`overlay`**: además del checklist general, cotejando contra el caption activo en ese `timeSeconds` (calculado igual que en el punto 3 de arriba), evalúa: (a) ¿la imagen del overlay tapa la cara del instructor? (b) ¿tapa el subtítulo? (c) ¿tapa el objeto o la acción de la que está hablando el instructor en ese momento, según el caption activo? (d) ¿está bien colocada a la izquierda de la pantalla y se ve legible al tamaño en que se renderiza (no diminuta ni cortada en el borde)? Cualquier oclusión de cara o subtítulo es `tipo: "visual"`, `severidad: "bloqueante"`.
+- **`overlay`**: además del checklist general, cotejando contra el caption activo en su `contentTime` (después de restar `introSeconds`, como exige el contrato temporal del paso 1), evalúa: (a) ¿la imagen del overlay tapa la cara del instructor? (b) ¿tapa el subtítulo? (c) ¿tapa el objeto o la acción de la que está hablando el instructor en ese momento, según el caption activo? (d) ¿está bien colocada a la izquierda de la pantalla y se ve legible al tamaño en que se renderiza (no diminuta ni cortada en el borde)? Cualquier oclusión de cara o subtítulo es `tipo: "visual"`, `severidad: "bloqueante"`.
 - **`inicio`**: ¿el video arranca en contenido real — sin conteo tipo "3, 2, 1", sin claqueta, sin media palabra o gesto de "ya, ya" previo al inicio real de la explicación? Si detectas un conteo, claqueta o palabra cortada, repórtalo con `tipo: "corte"` y `severidad: "bloqueante"`.
 - **`final`**: ¿el video corta limpio — sin una frase a medias, sin frame congelado, sin corte abrupto en medio de una palabra o gesto? Si el corte es a media frase o el frame se ve congelado/roto, repórtalo con `tipo: "corte"` y `severidad: "bloqueante"`.
 
