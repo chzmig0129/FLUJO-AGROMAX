@@ -107,7 +107,9 @@
 {"issue_id":"FLUJO-AGROMAX-m8u.9","label":"scope:trivial"}
 {"issue_id":"FLUJO-AGROMAX-mcf","label":"scope:trivial"}
 {"issue_id":"FLUJO-AGROMAX-mqt","label":"area:qa"}
+{"issue_id":"FLUJO-AGROMAX-mqt","label":"needs-redecomp"}
 {"issue_id":"FLUJO-AGROMAX-mqt","label":"scope:medium"}
+{"issue_id":"FLUJO-AGROMAX-mqt","label":"test-suspect"}
 {"issue_id":"FLUJO-AGROMAX-mqt.1","label":"area:qa"}
 {"issue_id":"FLUJO-AGROMAX-mqt.1","label":"scope:medium"}
 {"issue_id":"FLUJO-AGROMAX-mqt.1","label":"scope:small"}
@@ -260,6 +262,8 @@
 {"issue_id":"FLUJO-AGROMAX-qjm","label":"scope:small"}
 {"issue_id":"FLUJO-AGROMAX-r8q","label":"area:frontend"}
 {"issue_id":"FLUJO-AGROMAX-r8q","label":"scope:small"}
+{"issue_id":"FLUJO-AGROMAX-r9s","label":"area:workflow"}
+{"issue_id":"FLUJO-AGROMAX-r9s","label":"scope:small"}
 {"issue_id":"FLUJO-AGROMAX-rma","label":"scope:small"}
 {"issue_id":"FLUJO-AGROMAX-ryr","label":"scope:medium"}
 {"issue_id":"FLUJO-AGROMAX-sbj","label":"area:frontend"}
@@ -290,6 +294,9 @@
 {"issue_id":"FLUJO-AGROMAX-vy1","label":"scope:trivial"}
 {"issue_id":"FLUJO-AGROMAX-vz7","label":"scope:medium"}
 {"issue_id":"FLUJO-AGROMAX-wgo","label":"scope:small"}
+{"issue_id":"FLUJO-AGROMAX-xm5","label":"area:qa"}
+{"issue_id":"FLUJO-AGROMAX-xm5","label":"scope:medium"}
+{"issue_id":"FLUJO-AGROMAX-xm5","label":"test-suspect"}
 {"issue_id":"FLUJO-AGROMAX-yae","label":"area:frontend"}
 {"issue_id":"FLUJO-AGROMAX-yae","label":"integration-risk"}
 {"issue_id":"FLUJO-AGROMAX-yza","label":"scope:small"}

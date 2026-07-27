@@ -199,6 +199,8 @@
 {"created_at":"2026-07-25T11:10:58Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-qi6.3","issue_id":"FLUJO-AGROMAX-qi6.7","metadata":"{}","type":"discovered-from"}
 {"created_at":"2026-07-26T03:07:44Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-qi6","issue_id":"FLUJO-AGROMAX-qi6.8","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-07-26T03:07:44Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-qi6.7","issue_id":"FLUJO-AGROMAX-qi6.8","metadata":"{}","type":"discovered-from"}
+{"created_at":"2026-07-27T06:50:05Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-5uv","issue_id":"FLUJO-AGROMAX-r9s","metadata":"{}","type":"discovered-from"}
+{"created_at":"2026-07-27T06:50:05Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-mqt","issue_id":"FLUJO-AGROMAX-r9s","metadata":"{}","type":"discovered-from"}
 {"created_at":"2026-07-21T18:05:37Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-44k","issue_id":"FLUJO-AGROMAX-rma","metadata":"{}","type":"blocks"}
 {"created_at":"2026-07-21T18:05:55Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-7yl","issue_id":"FLUJO-AGROMAX-rma","metadata":"{}","type":"blocks"}
 {"created_at":"2026-07-21T18:06:02Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-f39","issue_id":"FLUJO-AGROMAX-rma","metadata":"{}","type":"blocks"}
@@ -225,6 +227,7 @@
 {"created_at":"2026-07-21T02:23:47Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-vd5","issue_id":"FLUJO-AGROMAX-vd5.5","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-07-21T02:24:14Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-vd5.4","issue_id":"FLUJO-AGROMAX-vd5.5","metadata":"{}","type":"blocks"}
 {"created_at":"2026-07-21T20:44:22Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-49y","issue_id":"FLUJO-AGROMAX-wgo","metadata":"{}","type":"discovered-from"}
+{"created_at":"2026-07-27T06:50:05Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-mqt","issue_id":"FLUJO-AGROMAX-xm5","metadata":"{}","type":"discovered-from"}
 {"created_at":"2026-07-21T20:18:09Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-tpi","issue_id":"FLUJO-AGROMAX-yae","metadata":"{}","type":"discovered-from"}
 {"created_at":"2026-07-21T22:33:57Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-9d0.1","issue_id":"FLUJO-AGROMAX-yza","metadata":"{}","type":"discovered-from"}
 {"created_at":"2026-07-24T19:33:41Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-zwl","issue_id":"FLUJO-AGROMAX-zwl.1","metadata":"{}","type":"parent-child"}
