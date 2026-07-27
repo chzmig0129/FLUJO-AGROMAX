@@ -130,4 +130,18 @@ está resuelto en `runPrepStages` (`src/lib/pipeline.ts`) con un
 
 ## Última corrida
 
-Pendiente: se completa al cerrar la corrida OVINOS en curso.
+**OVINOS_AGROMAX — completada el 27 de julio de 2026.**
+
+- Job: `891533f3-29cc-4fe1-9923-fce82115a5c2`
+- Estado final: `assembled`, sin error.
+- Render: 43/43 MP4 y 43/43 sidecars completos (`expectedFrames === actualFrames`).
+- Gate 2: 43/43 clases `APPROVED`.
+- Gate 3: 6/6 módulos `APPROVED`, 134/134 frames revisados y cero hallazgos bloqueantes abiertos.
+- Correcciones finales verificadas: se retiró el cierre ajeno de
+  `bebederos-y-suministro-de-agua`; `IMG_0565` quedó con proporciones
+  naturales en `procedimiento-de-laparoscopia`; la portada final dice
+  exactamente «¿Alimentas o nutres a tu ganado?».
+- Entrega: `jobs/891533f3-29cc-4fe1-9923-fce82115a5c2/deliver/CURSO_OVINOS_AGROMAX/`
+  con 43 MP4, 43 archivos `NOTAS.md`, `ESTRUCTURA_CURSO.md`, `QA_LOG.md`,
+  `DECISIONES.md` y `deliver/manifest.json` (`packagedAt:
+  2026-07-27T12:43:54.941Z`).
