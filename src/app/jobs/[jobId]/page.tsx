@@ -43,6 +43,7 @@
  * 5A/5B/5C sin re-planear.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import type {
   AssemblyProgressJson,
@@ -2657,6 +2658,14 @@ export default function JobPage() {
             )}
             {packageManifest && (
               <div className="package-result">
+                <div className="stepper-actions">
+                  <Link
+                    className="btn"
+                    href={`/jobs/${encodeURIComponent(jobId)}/course`}
+                  >
+                    Ver curso completo
+                  </Link>
+                </div>
                 <p className="assembly-card-meta">
                   {packageManifest.courseDir}
                 </p>

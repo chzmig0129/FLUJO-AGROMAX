@@ -1,0 +1,363 @@
+.page {
+  width: min(1440px, 100%);
+  margin: 0 auto;
+  padding: 2rem clamp(1rem, 3vw, 2.5rem) 4rem;
+}
+
+.topbar {
+  margin-bottom: 1.5rem;
+}
+
+.backLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 1.25rem;
+  color: var(--color-primary);
+  font-size: 0.9rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.backLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.courseEyebrow {
+  margin: 0 0 0.35rem;
+  color: var(--color-primary);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.topbar h1 {
+  max-width: 880px;
+  margin: 0;
+  color: #172019;
+  font-size: clamp(1.65rem, 3vw, 2.45rem);
+  letter-spacing: -0.025em;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(250px, 320px) minmax(0, 1fr);
+  gap: clamp(1.25rem, 2.6vw, 2.5rem);
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: 0 8px 26px rgba(20, 42, 25, 0.06);
+}
+
+.sidebarHeading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--color-border);
+  color: #243128;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.sidebarHeading span:last-child {
+  color: var(--color-muted);
+  font-weight: 550;
+}
+
+.moduleNav {
+  display: block;
+}
+
+.module + .module {
+  border-top: 1px solid var(--color-border);
+}
+
+.moduleSummary {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.1rem 0.75rem;
+  padding: 0.9rem 1rem;
+  cursor: pointer;
+  list-style-position: outside;
+  color: #26302a;
+}
+
+.moduleSummary::marker {
+  color: var(--color-primary);
+}
+
+.moduleSummary:hover {
+  background: #f5f9f5;
+}
+
+.moduleOrdinal {
+  color: var(--color-primary);
+  font-size: 0.68rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.moduleTitle {
+  grid-column: 1 / -1;
+  font-size: 0.92rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.moduleCount {
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--color-muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.lessonList {
+  margin: 0;
+  padding: 0 0 0.5rem;
+  list-style: none;
+}
+
+.lessonLink {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: start;
+  padding: 0.7rem 1rem;
+  border-left: 3px solid transparent;
+  color: #374039;
+  font-size: 0.82rem;
+  text-decoration: none;
+}
+
+.lessonLink:hover {
+  background: #f3f8f4;
+  color: var(--color-primary-hover);
+}
+
+.activeLesson {
+  border-left-color: var(--color-primary);
+  background: #edf7f0;
+  color: #0b693c;
+}
+
+.lessonOrdinal,
+.lessonDuration {
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.lessonNavTitle {
+  font-weight: 620;
+  line-height: 1.35;
+}
+
+.lesson {
+  min-width: 0;
+}
+
+.videoFrame {
+  overflow: hidden;
+  border: 1px solid #233129;
+  border-radius: 14px;
+  background: #101311;
+  box-shadow: 0 16px 38px rgba(10, 25, 15, 0.16);
+}
+
+.video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #101311;
+  object-fit: contain;
+}
+
+.lessonHeader {
+  padding: 1.5rem 0 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.lessonMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.45rem;
+  color: var(--color-primary);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.lessonHeader h2 {
+  margin: 0;
+  color: #172019;
+  font-size: clamp(1.45rem, 2.6vw, 2rem);
+  letter-spacing: -0.02em;
+}
+
+.moduleName {
+  margin: 0.4rem 0 0;
+  color: var(--color-muted);
+  font-size: 0.95rem;
+}
+
+.topicSection,
+.moduleTopics {
+  padding: 1.25rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.topicSection h3,
+.moduleTopics h3 {
+  margin: 0 0 0.8rem;
+  color: #26302a;
+  font-size: 0.95rem;
+}
+
+.topicList {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.topicList li::marker {
+  color: var(--color-primary);
+}
+
+.broll {
+  margin-top: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #d9e8dc;
+  border-radius: 9px;
+  background: #f4f9f5;
+}
+
+.broll h4 {
+  margin: 0 0 0.45rem;
+  color: #526058;
+  font-size: 0.72rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.broll ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.15rem;
+  color: #435047;
+  font-size: 0.9rem;
+}
+
+.moduleTopics ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.moduleTopics li {
+  padding: 0.35rem 0.65rem;
+  border: 1px solid #d6e4d9;
+  border-radius: 999px;
+  background: #f7faf7;
+  color: #425148;
+  font-size: 0.8rem;
+}
+
+.pager {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  padding-top: 1.5rem;
+}
+
+.pagerLink {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: var(--color-surface);
+  color: #273129;
+  font-size: 0.86rem;
+  font-weight: 650;
+  line-height: 1.3;
+  text-decoration: none;
+}
+
+.pagerLink:hover {
+  border-color: #a9cdb2;
+  background: #f7faf7;
+  color: var(--color-primary-hover);
+}
+
+.pagerDirection {
+  color: var(--color-primary);
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.nextLink {
+  text-align: right;
+}
+
+.disabledPager {
+  opacity: 0.5;
+  background: transparent;
+}
+
+@media (max-width: 860px) {
+  .page {
+    padding-top: 1.5rem;
+  }
+
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sidebar {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 540px) {
+  .page {
+    padding-right: 0.8rem;
+    padding-left: 0.8rem;
+  }
+
+  .pager {
+    grid-template-columns: 1fr;
+  }
+
+  .nextLink {
+    text-align: left;
+  }
+
+  .videoFrame {
+    border-radius: 9px;
+  }
+}
