@@ -59,6 +59,11 @@
 {"created_at":"2026-07-21T19:51:34Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-7uf","issue_id":"FLUJO-AGROMAX-bid","metadata":"{}","type":"discovered-from"}
 {"created_at":"2026-07-21T02:03:31Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-nvw.1","issue_id":"FLUJO-AGROMAX-c5a","metadata":"{}","type":"discovered-from"}
 {"created_at":"2026-07-21T04:09:04Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-9u6.4","issue_id":"FLUJO-AGROMAX-dcs","metadata":"{}","type":"discovered-from"}
+{"created_at":"2026-07-28T01:29:37Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-dr7","issue_id":"FLUJO-AGROMAX-dr7.1","metadata":"{}","type":"parent-child"}
+{"created_at":"2026-07-28T01:29:38Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-dr7","issue_id":"FLUJO-AGROMAX-dr7.2","metadata":"{}","type":"parent-child"}
+{"created_at":"2026-07-28T01:29:38Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-dr7","issue_id":"FLUJO-AGROMAX-dr7.3","metadata":"{}","type":"parent-child"}
+{"created_at":"2026-07-28T01:29:39Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-dr7.1","issue_id":"FLUJO-AGROMAX-dr7.3","metadata":"{}","type":"blocks"}
+{"created_at":"2026-07-28T01:29:39Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-dr7.2","issue_id":"FLUJO-AGROMAX-dr7.3","metadata":"{}","type":"blocks"}
 {"created_at":"2026-07-24T19:36:58Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-zwl","issue_id":"FLUJO-AGROMAX-hvy","metadata":"{}","type":"discovered-from"}
 {"created_at":"2026-07-21T23:35:58Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-2ci.3","issue_id":"FLUJO-AGROMAX-je4","metadata":"{}","type":"discovered-from"}
 {"created_at":"2026-07-27T09:12:45Z","created_by":"Miguel Chavez","depends_on_id":"FLUJO-AGROMAX-z3e","issue_id":"FLUJO-AGROMAX-jjv","metadata":"{}","type":"blocks"}

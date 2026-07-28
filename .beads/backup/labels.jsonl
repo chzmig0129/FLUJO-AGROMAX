@@ -82,6 +82,17 @@
 {"issue_id":"FLUJO-AGROMAX-c5a","label":"scope:medium"}
 {"issue_id":"FLUJO-AGROMAX-coc","label":"area:backend"}
 {"issue_id":"FLUJO-AGROMAX-coc","label":"scope:medium"}
+{"issue_id":"FLUJO-AGROMAX-dr7","label":"area:frontend"}
+{"issue_id":"FLUJO-AGROMAX-dr7","label":"scope:medium"}
+{"issue_id":"FLUJO-AGROMAX-dr7.1","label":"area:frontend"}
+{"issue_id":"FLUJO-AGROMAX-dr7.1","label":"scope:medium"}
+{"issue_id":"FLUJO-AGROMAX-dr7.2","label":"area:frontend"}
+{"issue_id":"FLUJO-AGROMAX-dr7.2","label":"scope:medium"}
+{"issue_id":"FLUJO-AGROMAX-dr7.2","label":"scope:small"}
+{"issue_id":"FLUJO-AGROMAX-dr7.3","label":"area:deploy"}
+{"issue_id":"FLUJO-AGROMAX-dr7.3","label":"area:frontend"}
+{"issue_id":"FLUJO-AGROMAX-dr7.3","label":"scope:medium"}
+{"issue_id":"FLUJO-AGROMAX-dr7.3","label":"scope:small"}
 {"issue_id":"FLUJO-AGROMAX-drk","label":"area:backend"}
 {"issue_id":"FLUJO-AGROMAX-drk","label":"scope:medium"}
 {"issue_id":"FLUJO-AGROMAX-dxb","label":"scope:small"}
