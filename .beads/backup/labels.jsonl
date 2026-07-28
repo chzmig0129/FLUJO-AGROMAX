@@ -47,6 +47,8 @@
 {"issue_id":"FLUJO-AGROMAX-8nl.4","label":"scope:medium"}
 {"issue_id":"FLUJO-AGROMAX-8nl.5","label":"scope:small"}
 {"issue_id":"FLUJO-AGROMAX-8nl.6","label":"scope:medium"}
+{"issue_id":"FLUJO-AGROMAX-8ss","label":"area:frontend"}
+{"issue_id":"FLUJO-AGROMAX-8ss","label":"scope:small"}
 {"issue_id":"FLUJO-AGROMAX-8v1","label":"scope:trivial"}
 {"issue_id":"FLUJO-AGROMAX-9cj","label":"area:backend"}
 {"issue_id":"FLUJO-AGROMAX-9cj","label":"scope:medium"}
