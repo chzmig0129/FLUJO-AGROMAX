@@ -2663,7 +2663,15 @@ export default function JobPage() {
                 <ul className="cuts-list">
                   {packageManifest.lessons.map((l) => (
                     <li key={l.lessonId}>
-                      {l.moduleId} / {l.lessonId} — {l.fileName}
+                      {l.moduleId} / {l.lessonId} — {l.fileName}{" "}
+                      <a
+                        className="btn btn-secondary"
+                        href={`/api/jobs/${encodeURIComponent(jobId)}/render/${encodeURIComponent(l.lessonId)}.mp4`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Ver MP4
+                      </a>
                     </li>
                   ))}
                 </ul>
