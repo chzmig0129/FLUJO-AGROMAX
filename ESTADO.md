@@ -133,15 +133,19 @@ está resuelto en `runPrepStages` (`src/lib/pipeline.ts`) con un
 **OVINOS_AGROMAX — completada el 27 de julio de 2026.**
 
 - Job: `891533f3-29cc-4fe1-9923-fce82115a5c2`
-- Estado final: `assembled`, sin error.
+- Estado final: `assembled`, con `error: null`.
 - Render: 43/43 MP4 y 43/43 sidecars completos (`expectedFrames === actualFrames`).
 - Gate 2: 43/43 clases `APPROVED`.
 - Gate 3: 6/6 módulos `APPROVED`, 134/134 frames revisados y cero hallazgos bloqueantes abiertos.
 - Correcciones finales verificadas: se retiró el cierre ajeno de
-  `bebederos-y-suministro-de-agua`; `IMG_0565` quedó con proporciones
-  naturales en `procedimiento-de-laparoscopia`; la portada final dice
-  exactamente «¿Alimentas o nutres a tu ganado?».
+  `bebederos-y-suministro-de-agua`; `IMG_0565`, `IMG_0611` e `IMG_0596`
+  quedaron con proporciones naturales y pillarbox en
+  `procedimiento-de-laparoscopia`; la portada final dice inequívocamente
+  «¿Alimentas o nutres a tu ganado?».
 - Entrega: `jobs/891533f3-29cc-4fe1-9923-fce82115a5c2/deliver/CURSO_OVINOS_AGROMAX/`
-  con 43 MP4, 43 archivos `NOTAS.md`, `ESTRUCTURA_CURSO.md`, `QA_LOG.md`,
-  `DECISIONES.md` y `deliver/manifest.json` (`packagedAt:
-  2026-07-27T12:43:54.941Z`).
+  con 6 módulos, 43 MP4, 43 archivos `NOTAS.md`, `ESTRUCTURA_CURSO.md`,
+  `QA_LOG.md`, `DECISIONES.md` y `deliver/manifest.json` (`packagedAt:
+  2026-07-27T15:41:50.115Z`). Los 43/43 MP4 entregados coinciden por tamaño
+  y SHA con sus renders fuente.
+- Evidencia final: `C:\tmp\jjv-evidence.json` (SHA-256
+  `2450e43673ca0c4e31000e6ad4ad00a300edadc2f32ebc540ace4a2564f5d076`).
