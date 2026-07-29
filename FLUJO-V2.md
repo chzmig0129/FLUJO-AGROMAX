@@ -74,12 +74,23 @@ comparar contra esta tabla.
 
 ## Fases siguientes (en orden — NO adelantarse)
 
-1. ✅→ **Motores** (transcripción persistente + backend ffmpeg) — fase actual.
-2. **Corrida módulo 1 etapa por etapa**, validando cada artefacto y midiendo
-   tiempos contra v1. Aquí se endurecen los puntos frágiles que salgan.
-3. **Frontend v2**: wizard por pasos, bonito (skill `frontend-design`), estatus
-   en tiempo real por etapa (progreso X/N, tiempos, gates), historial de jobs.
-   Sustituye la UI actual cuando la corrida del módulo 1 haya pasado.
+1. ✅ **Motores** (transcripción persistente + backend ffmpeg) — cerrada
+   (commit `6016c58`; smoke 95/95 frames). Validación real pendiente en el piloto.
+2. **Modo paso a paso + Frontend v2** — fase actual. Dos piezas:
+   - **El pipeline deja de encadenarse solo.** El ingest corre solo hasta
+     `sampled` (probe + transcripción + frames) y AHÍ SE DETIENE. Cada etapa
+     posterior corre únicamente con su botón. El encadenado completo queda solo
+     detrás de `run-all`/`AUTO_RUN` explícitos.
+   - **Frontend v2**: wizard por pasos, bonito (skill `frontend-design`), estatus
+     en tiempo real por etapa (progreso X/N, tiempos, gates), historial de jobs.
+     Es la herramienta con la que el USUARIO opera el piloto — sin ella no hay
+     fase 3.
+3. **Piloto módulo 1 EN LA PC (`ssh itg`), operado por el usuario desde la UI.**
+   El usuario sube `material/MODULO1_OVINOS.zip` desde el navegador
+   (`https://itg.tailf75570.ts.net`), ve la transcripción avanzar en vivo,
+   aprueba la estructura, y así etapa por etapa. Los agentes NO corren el flujo
+   por él; asisten cuando algo falla. Aquí se validan CUDA `--serve`, NVENC y
+   las divergencias visuales (issues `17m`, `acz`) y se miden tiempos vs v1.
 4. **Storage**: migrar el estado de los `*.json` sueltos a **SQLite** (recomendado
    sobre MySQL/Postgres: cero servidor que administrar, un archivo por instalación,
    Drizzle/better-sqlite3, y sobra para este volumen). Los artefactos pesados
