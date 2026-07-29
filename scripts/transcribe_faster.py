@@ -42,6 +42,16 @@ import os
 import sys
 import sysconfig
 
+# En Windows, el stdout/stderr heredado del proceso puede quedar en el
+# codepage local (p.ej. cp1252) en vez de UTF-8, lo que destruye acentos al
+# ser leídos por python-engine.ts. Forzamos UTF-8 explícitamente en ambos
+# streams (posicional y --serve). reconfigure existe desde Python 3.7; el
+# hasattr es solo defensivo por si corre en un intérprete más viejo.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 
 def log(msg: str) -> None:
     """Escribe un mensaje de progreso/diagnóstico a stderr."""
@@ -215,10 +225,10 @@ def serve_loop(model) -> None:
 
         try:
             output = transcribe_one(model, video_path, language)
-            print(json.dumps(output, ensure_ascii=False), flush=True)
+            print(json.dumps(output, ensure_ascii=True), flush=True)
         except Exception as exc:  # noqa: BLE001 - un clip fallido no debe matar el loop
             log(f"Error al transcribir '{video_path}': {exc}")
-            print(json.dumps({"error": str(exc)}, ensure_ascii=False), flush=True)
+            print(json.dumps({"error": str(exc)}, ensure_ascii=True), flush=True)
 
     log("EOF en stdin; saliendo del modo --serve.")
 
@@ -265,7 +275,7 @@ def main() -> None:
         log(f"Error al transcribir con faster-whisper: {exc}")
         sys.exit(1)
 
-    json.dump(output, sys.stdout, ensure_ascii=False)
+    json.dump(output, sys.stdout, ensure_ascii=True)
 
 
 if __name__ == "__main__":

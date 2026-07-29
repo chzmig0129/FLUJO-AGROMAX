@@ -183,7 +183,14 @@ export function makePythonEngine(
   }
 
   function spawnChild(): Child {
-    const proc = spawn(pythonBin, [scriptPath, "--serve"]);
+    // PYTHONIOENCODING=utf-8 fuerza que el intérprete Python use UTF-8 en
+    // stdout/stderr independientemente del codepage local del SO (crítico
+    // en Windows, donde por defecto puede ser cp1252 y destruir acentos).
+    // Es cinturón y tirantes junto con el sys.stdout/stderr.reconfigure()
+    // que hacen los propios scripts.
+    const proc = spawn(pythonBin, [scriptPath, "--serve"], {
+      env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+    });
 
     // El progreso/diagnóstico del motor viaja por stderr; lo dejamos fluir a
     // console.error con un prefijo que identifica el motor.
