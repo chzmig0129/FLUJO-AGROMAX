@@ -13,6 +13,13 @@
  *                               palmierBackend.isAvailable()/health() en
  *                               ./palmier/backend.ts) si la app no está
  *                               corriendo en ese momento.
+ *   ASSEMBLY_BACKEND=ffmpeg     Headless, sin navegador: UN comando ffmpeg
+ *                               por clase (intro + tramos "keep" + overlays
+ *                               + captions ASS), con el encoder de hardware
+ *                               que la máquina soporte de verdad
+ *                               (h264_nvenc → h264_videotoolbox → libx264,
+ *                               ver ./ffmpeg/encoder.ts). El intro sigue
+ *                               siendo Remotion (ver ./ffmpeg/backend.ts).
  *
  * Este es el ÚNICO lugar del código donde se nombra una implementación
  * concreta. El resto del sistema (assembly-stage.ts, las rutas de API, la
@@ -22,12 +29,14 @@
  */
 import { palmierBackend } from "./palmier/backend";
 import { remotionBackend } from "./remotion/backend";
+import { ffmpegBackend } from "./ffmpeg/backend";
 import type { AssemblyBackend } from "./types";
 
 /** Registro de implementaciones disponibles, indexado por nombre. */
 const BACKENDS: Record<string, AssemblyBackend> = {
   remotion: remotionBackend,
   palmier: palmierBackend,
+  ffmpeg: ffmpegBackend,
 };
 
 /** Backend usado cuando ASSEMBLY_BACKEND no está definido. */

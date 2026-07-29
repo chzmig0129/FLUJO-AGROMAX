@@ -20,3 +20,6 @@ tsconfig.tsbuildinfo
 /material/**/*.MOV
 /material/**/*.mp4
 /material/**/*.zip
+
+# Bytecode python de checks
+__pycache__/
