@@ -201,6 +201,22 @@ const VERDICT_BADGE_CLASS: Record<Verdict["verdict"], string> = {
   otro_curso: "verdict-badge verdict-badge--otro-curso",
 };
 
+/**
+ * Estatus del job que implican que el paso 2 (transcripción/muestreo) ya
+ * quedó atrás y hay etapas posteriores con artefactos derivados (estructura,
+ * aprobación, preparación, ensamblaje). Re-transcribir o re-muestrear frames
+ * en estos casos regresa el job a 'sampled' vía runPipeline y deja esos
+ * artefactos huérfanos, así que requieren confirmación explícita.
+ */
+const BEYOND_SAMPLED_STATUSES: JobJson["status"][] = [
+  "planning",
+  "planned",
+  "preparing",
+  "prepared",
+  "assembling",
+  "assembled",
+];
+
 /** Etiqueta corta del status crudo del job (se muestra bajo el título). */
 const STATUS_LABELS: Record<JobJson["status"], string> = {
   ingested: "Material ingerido",
@@ -1569,7 +1585,16 @@ export default function JobPage() {
                 <button
                   className="btn btn-ghost"
                   type="button"
-                  onClick={handleRetranscribe}
+                  onClick={() => {
+                    if (
+                      !BEYOND_SAMPLED_STATUSES.includes(job.status) ||
+                      window.confirm(
+                        "Este proyecto ya avanzó más allá de la transcripción (estructura, preparación y/o ensamblaje). Re-transcribir lo regresa a 'listo para estructurar' y esas etapas posteriores quedarán invalidadas/huérfanas. ¿Continuar?"
+                      )
+                    ) {
+                      handleRetranscribe();
+                    }
+                  }}
                   disabled={retranscribing}
                 >
                   {retranscribing ? "Re-transcribiendo…" : "Re-transcribir"}
@@ -1577,7 +1602,16 @@ export default function JobPage() {
                 <button
                   className="btn btn-ghost"
                   type="button"
-                  onClick={handleSample}
+                  onClick={() => {
+                    if (
+                      !BEYOND_SAMPLED_STATUSES.includes(job.status) ||
+                      window.confirm(
+                        "Este proyecto ya avanzó más allá de la transcripción (estructura, preparación y/o ensamblaje). Re-muestrear frames lo regresa a 'listo para estructurar' y esas etapas posteriores quedarán invalidadas/huérfanas. ¿Continuar?"
+                      )
+                    ) {
+                      handleSample();
+                    }
+                  }}
                   disabled={sampling}
                 >
                   {sampling ? "Muestreando…" : "Re-muestrear frames"}
