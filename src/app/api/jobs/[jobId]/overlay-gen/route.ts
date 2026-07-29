@@ -8,12 +8,18 @@
  * /api/jobs/[jobId]/prep: valida que el job exista (404 si no) y que tenga
  * el prerequisito real en disco (400 si no), dispara
  * `runOverlayGenStage` sin esperar a que termine, y responde de inmediato.
+ *
+ * Candado anti-duplicados (run-lock): 409 si esta etapa ya está corriendo
+ * para este job.
  */
 import { NextResponse } from "next/server";
 import { readJobJson } from "@/lib/jobs";
 import { hasOverlayGenPrerequisites, runOverlayGenStage } from "@/lib/overlay-gen-stage";
+import { release, tryAcquire } from "@/lib/run-lock";
 
 export const runtime = "nodejs";
+
+const STAGE = "overlay-gen";
 
 export async function POST(
   request: Request,
@@ -30,18 +36,33 @@ export async function POST(
     );
   }
 
-  if (!(await hasOverlayGenPrerequisites(jobId))) {
+  if (!tryAcquire(jobId, STAGE)) {
     return NextResponse.json(
-      {
-        error:
-          "No se pueden generar overlays: el proyecto no tiene ningún brief en 'plan/overlays/*.json' (falta correr la etapa de briefs de overlays primero, o el curso no tiene overlays que generar).",
-      },
-      { status: 400 }
+      { error: "Esta etapa ya está corriendo" },
+      { status: 409 }
     );
   }
 
-  // Fire-and-forget: no se espera a que termine la generación de overlays para responder.
-  runOverlayGenStage(jobId).catch(console.error);
+  let started = false;
+  try {
+    if (!(await hasOverlayGenPrerequisites(jobId))) {
+      return NextResponse.json(
+        {
+          error:
+            "No se pueden generar overlays: el proyecto no tiene ningún brief en 'plan/overlays/*.json' (falta correr la etapa de briefs de overlays primero, o el curso no tiene overlays que generar).",
+        },
+        { status: 400 }
+      );
+    }
 
-  return NextResponse.json({ ok: true });
+    started = true;
+    // Fire-and-forget: no se espera a que termine la generación de overlays para responder.
+    runOverlayGenStage(jobId)
+      .catch(console.error)
+      .finally(() => release(jobId, STAGE));
+
+    return NextResponse.json({ ok: true });
+  } finally {
+    if (!started) release(jobId, STAGE);
+  }
 }

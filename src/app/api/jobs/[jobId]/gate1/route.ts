@@ -8,12 +8,18 @@
  * haber generado al menos un overlay antes de poder inspeccionarlo).
  * Fire-and-forget: no se espera a que termine el gate para responder, mismo
  * patrón que `/api/jobs/[jobId]/gate2`.
+ *
+ * Candado anti-duplicados (run-lock): 409 si esta etapa ya está corriendo
+ * para este job.
  */
 import { NextResponse } from "next/server";
 import { readJobJson } from "@/lib/jobs";
 import { hasGate1Composites, runGate1Stage } from "@/lib/gate1-stage";
+import { release, tryAcquire } from "@/lib/run-lock";
 
 export const runtime = "nodejs";
+
+const STAGE = "gate1";
 
 export async function POST(
   request: Request,
@@ -30,17 +36,32 @@ export async function POST(
     );
   }
 
-  if (!(await hasGate1Composites(jobId))) {
+  if (!tryAcquire(jobId, STAGE)) {
     return NextResponse.json(
-      {
-        error: `No se puede correr Gate 1: el job '${jobId}' no tiene ningún composite en 'qa/gate1-chk/*.jpg' (falta generar overlays primero).`,
-      },
-      { status: 400 }
+      { error: "Esta etapa ya está corriendo" },
+      { status: 409 }
     );
   }
 
-  // Fire-and-forget: no se espera a que termine Gate 1 para responder.
-  runGate1Stage(jobId).catch(console.error);
+  let started = false;
+  try {
+    if (!(await hasGate1Composites(jobId))) {
+      return NextResponse.json(
+        {
+          error: `No se puede correr Gate 1: el job '${jobId}' no tiene ningún composite en 'qa/gate1-chk/*.jpg' (falta generar overlays primero).`,
+        },
+        { status: 400 }
+      );
+    }
 
-  return NextResponse.json({ ok: true });
+    started = true;
+    // Fire-and-forget: no se espera a que termine Gate 1 para responder.
+    runGate1Stage(jobId)
+      .catch(console.error)
+      .finally(() => release(jobId, STAGE));
+
+    return NextResponse.json({ ok: true });
+  } finally {
+    if (!started) release(jobId, STAGE);
+  }
 }

@@ -11,14 +11,20 @@
  * `qa/gate3/<moduleId>.json` o `plan/captions-audit.json`) — sin eso no hay
  * nada que el director pueda dirigir (400 si ninguno existe). Dispara
  * `runDirectorStage` sin esperar a que termine, y responde de inmediato.
+ *
+ * Candado anti-duplicados (run-lock): 409 si el director ya está corriendo
+ * para este job.
  */
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { NextResponse } from "next/server";
 import { readJobJson, qaDir, planDir } from "@/lib/jobs";
 import { runDirectorStage } from "@/lib/director-stage";
+import { release, tryAcquire } from "@/lib/run-lock";
 
 export const runtime = "nodejs";
+
+const STAGE = "director";
 
 /** Verifica (tolerante) si `qa/gate1.json` existe. */
 async function hasGate1Verdict(jobId: string): Promise<boolean> {
@@ -77,25 +83,40 @@ export async function POST(
     );
   }
 
-  const [gate1Ok, gate2Ok, gate3Ok, captionsAuditOk] = await Promise.all([
-    hasGate1Verdict(jobId),
-    hasGate2Verdicts(jobId),
-    hasGate3Verdicts(jobId),
-    hasCaptionsAuditVerdict(jobId),
-  ]);
-
-  if (!gate1Ok && !gate2Ok && !gate3Ok && !captionsAuditOk) {
+  if (!tryAcquire(jobId, STAGE)) {
     return NextResponse.json(
-      {
-        error:
-          "No se puede correr el director de edición: el proyecto todavía no tiene ningún veredicto de QA ('qa/gate1.json', 'qa/gate2/<lessonId>.json', 'qa/gate3/<moduleId>.json' ni 'plan/captions-audit.json') que dirigir (falta correr al menos un gate primero).",
-      },
-      { status: 400 }
+      { error: "Esta etapa ya está corriendo" },
+      { status: 409 }
     );
   }
 
-  // Fire-and-forget: no se espera a que termine el loop del director para responder.
-  runDirectorStage(jobId).catch(console.error);
+  let started = false;
+  try {
+    const [gate1Ok, gate2Ok, gate3Ok, captionsAuditOk] = await Promise.all([
+      hasGate1Verdict(jobId),
+      hasGate2Verdicts(jobId),
+      hasGate3Verdicts(jobId),
+      hasCaptionsAuditVerdict(jobId),
+    ]);
 
-  return NextResponse.json({ ok: true });
+    if (!gate1Ok && !gate2Ok && !gate3Ok && !captionsAuditOk) {
+      return NextResponse.json(
+        {
+          error:
+            "No se puede correr el director de edición: el proyecto todavía no tiene ningún veredicto de QA ('qa/gate1.json', 'qa/gate2/<lessonId>.json', 'qa/gate3/<moduleId>.json' ni 'plan/captions-audit.json') que dirigir (falta correr al menos un gate primero).",
+        },
+        { status: 400 }
+      );
+    }
+
+    started = true;
+    // Fire-and-forget: no se espera a que termine el loop del director para responder.
+    runDirectorStage(jobId)
+      .catch(console.error)
+      .finally(() => release(jobId, STAGE));
+
+    return NextResponse.json({ ok: true });
+  } finally {
+    if (!started) release(jobId, STAGE);
+  }
 }

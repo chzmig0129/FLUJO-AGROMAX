@@ -153,6 +153,14 @@ interface SummaryJson {
 
 interface JobApiResponse {
   job: JobJson;
+  /**
+   * Candado anti-duplicados (run-lock, ver src/lib/run-lock.ts): nombres de
+   * etapa de agente en vuelo para este job ("overlay-briefs", "gate1", etc.)
+   * — permite deshabilitar el botón correspondiente y mostrar "Corriendo…"
+   * aunque el disparo haya venido de otra pestaña o de antes de recargar la
+   * página. Opcional por compatibilidad con respuestas viejas cacheadas.
+   */
+  running?: string[];
   media: MediaInfo[] | null;
   progress: ProgressJson | null;
   summary: SummaryJson | null;
@@ -808,6 +816,13 @@ export default function JobPage() {
       const res = await fetch(`/api/jobs/${jobId}/audit-captions`, {
         method: "POST",
       });
+      if (res.status === 409) {
+        // Benigno: ya hay una auditoría en vuelo (candado run-lock), no un
+        // error. `running` en el próximo poll refleja el estado real.
+        setAuditCaptionsNotice(true);
+        await loadJob();
+        return;
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         setAuditCaptionsError(
@@ -821,7 +836,7 @@ export default function JobPage() {
     } finally {
       setAuditingCaptions(false);
     }
-  }, [jobId]);
+  }, [jobId, loadJob]);
 
   /* -------- gates de QA ------------------------------------------------ */
 
@@ -839,6 +854,12 @@ export default function JobPage() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ lessonId }),
         });
+        if (res.status === 409) {
+          // Benigno: Gate 2 ya está corriendo (candado run-lock) para este
+          // job, no un error. `running` en el próximo poll refleja el chip.
+          await loadJob();
+          return;
+        }
         if (!res.ok) {
           const body = await res.json().catch(() => null);
           setGate2Errors((prev) => ({
@@ -884,6 +905,13 @@ export default function JobPage() {
       const res = await fetch(`/api/jobs/${jobId}/gate2-all`, {
         method: "POST",
       });
+      if (res.status === 409) {
+        // Benigno: gate2-all ya está corriendo (candado run-lock) para este
+        // job, no un error. El chip "Corriendo…" refleja `running`.
+        await loadJob();
+        setGate2AllRunning(false);
+        return;
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         setGate2AllError(
@@ -927,6 +955,12 @@ export default function JobPage() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ moduleId }),
         });
+        if (res.status === 409) {
+          // Benigno: Gate 3 ya está corriendo (candado run-lock) para este
+          // job, no un error. `running` en el próximo poll refleja el chip.
+          await loadJob();
+          return;
+        }
         if (!res.ok) {
           const body = await res.json().catch(() => null);
           setGate3Errors((prev) => ({
@@ -970,6 +1004,11 @@ export default function JobPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({}),
       });
+      if (res.status === 409) {
+        // Benigno: ya está corriendo (candado run-lock), no un error.
+        await loadJob();
+        return;
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         setOverlayBriefsError(
@@ -994,6 +1033,11 @@ export default function JobPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({}),
       });
+      if (res.status === 409) {
+        // Benigno: ya está corriendo (candado run-lock), no un error.
+        await loadJob();
+        return;
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         setOverlayGenError(
@@ -1018,6 +1062,11 @@ export default function JobPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({}),
       });
+      if (res.status === 409) {
+        // Benigno: Gate 1 ya está corriendo (candado run-lock), no un error.
+        await loadJob();
+        return;
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         setGate1Error(body?.error ?? "No se pudo correr el Gate 1.");
@@ -1072,6 +1121,12 @@ export default function JobPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({}),
       });
+      if (res.status === 409) {
+        // Benigno: el empaquetado ya está corriendo (candado run-lock), no
+        // un error.
+        await loadJob();
+        return;
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         setPackageError(body?.error ?? "No se pudo empaquetar el curso.");
@@ -1155,6 +1210,7 @@ export default function JobPage() {
 
   const {
     job,
+    running,
     media,
     progress,
     summary,
@@ -1178,6 +1234,17 @@ export default function JobPage() {
 
   const isError = job.status === "error";
   const stages: NonNullable<JobJson["stages"]> = job.stages ?? {};
+
+  /**
+   * Candado anti-duplicados (run-lock): true si el backend reporta la etapa
+   * `stage` como en vuelo (GET /api/jobs/[jobId] -> running[]). Se usa para
+   * deshabilitar el botón correspondiente y mostrar "Corriendo…" incluso si
+   * el disparo vino de otra pestaña/sesión, o si la página se recargó
+   * después de haber disparado la etapa (el estado local del handler solo
+   * cubre el fetch en sí, que es fire-and-forget y responde casi de
+   * inmediato).
+   */
+  const isRunning = (stage: string): boolean => (running ?? []).includes(stage);
 
   // ¿En qué etapa (de job.stages) quedó colgado el error? La que arrancó y
   // no terminó. Determina en qué PASO del wizard pintar el error.
@@ -2149,10 +2216,10 @@ export default function JobPage() {
                   className="btn btn-secondary"
                   type="button"
                   onClick={handleAuditCaptions}
-                  disabled={auditingCaptions}
+                  disabled={auditingCaptions || isRunning("audit-captions")}
                 >
-                  {auditingCaptions
-                    ? "Disparando auditoría…"
+                  {auditingCaptions || isRunning("audit-captions")
+                    ? "Corriendo…"
                     : "Auditar subtítulos (IA)"}
                 </button>
               </div>
@@ -2179,7 +2246,7 @@ export default function JobPage() {
         >
           <div className="substage">
             <span className="substage-icon">
-              {generatingBriefs ? (
+              {generatingBriefs || isRunning("overlay-briefs") ? (
                 <span className="spinner" />
               ) : briefsEntries.length > 0 ? (
                 "✓"
@@ -2189,24 +2256,36 @@ export default function JobPage() {
             </span>
             <span className="substage-name">1 · Briefs</span>
             <span className="substage-meta">
-              {briefsEntries.length > 0
-                ? `${briefsEntries.reduce(
-                    (n, [, f]) => n + (f?.briefs.length ?? 0),
-                    0
-                  )} briefs en ${briefsEntries.length} clases`
-                : "—"}
+              {isRunning("overlay-briefs")
+                ? "Corriendo…"
+                : briefsEntries.length > 0
+                  ? `${briefsEntries.reduce(
+                      (n, [, f]) => n + (f?.briefs.length ?? 0),
+                      0
+                    )} briefs en ${briefsEntries.length} clases`
+                  : "—"}
             </span>
           </div>
           <div className="substage">
             <span className="substage-icon">
-              {generatingOverlayImages ? <span className="spinner" /> : "•"}
+              {generatingOverlayImages || isRunning("overlay-gen") ? (
+                <span className="spinner" />
+              ) : (
+                "•"
+              )}
             </span>
             <span className="substage-name">2 · Imágenes</span>
-            <span className="substage-meta">requiere Chrome CDP en el Mac</span>
+            <span className="substage-meta">
+              {isRunning("overlay-gen")
+                ? "Corriendo…"
+                : "requiere Chrome CDP en el Mac"}
+            </span>
           </div>
           <div className="substage">
             <span className="substage-icon">
-              {gate1Loading || gatePollTimersRef.current["gate1"] ? (
+              {gate1Loading ||
+              isRunning("gate1") ||
+              gatePollTimersRef.current["gate1"] ? (
                 <span className="spinner" />
               ) : gate1 ? (
                 gate1Rejected.length > 0 ? (
@@ -2248,10 +2327,10 @@ export default function JobPage() {
               className="btn"
               type="button"
               onClick={handleOverlayBriefs}
-              disabled={generatingBriefs || cuts === null}
+              disabled={generatingBriefs || isRunning("overlay-briefs") || cuts === null}
             >
-              {generatingBriefs
-                ? "Generando briefs…"
+              {generatingBriefs || isRunning("overlay-briefs")
+                ? "Corriendo…"
                 : briefsEntries.length > 0
                   ? "Re-generar briefs"
                   : "Generar briefs"}
@@ -2260,20 +2339,26 @@ export default function JobPage() {
               className="btn btn-secondary"
               type="button"
               onClick={handleOverlayGen}
-              disabled={generatingOverlayImages || briefsEntries.length === 0}
+              disabled={
+                generatingOverlayImages ||
+                isRunning("overlay-gen") ||
+                briefsEntries.length === 0
+              }
               title="Requiere Chrome con depuración remota (puerto 9222) ya logueado en este Mac"
             >
-              {generatingOverlayImages
-                ? "Generando imágenes…"
+              {generatingOverlayImages || isRunning("overlay-gen")
+                ? "Corriendo…"
                 : "Generar imágenes"}
             </button>
             <button
               className="btn btn-secondary"
               type="button"
               onClick={handleGate1}
-              disabled={gate1Loading || briefsEntries.length === 0}
+              disabled={gate1Loading || isRunning("gate1") || briefsEntries.length === 0}
             >
-              {gate1Loading ? "Corriendo Gate 1…" : "Correr Gate 1"}
+              {gate1Loading || isRunning("gate1")
+                ? "Corriendo…"
+                : "Correr Gate 1"}
             </button>
             <button
               className="btn btn-secondary"
@@ -2514,13 +2599,17 @@ export default function JobPage() {
               className="btn"
               type="button"
               onClick={handleGate2All}
-              disabled={gate2AllRunning || completedRenders.length === 0}
+              disabled={
+                gate2AllRunning ||
+                isRunning("gate2-all") ||
+                completedRenders.length === 0
+              }
             >
-              {gate2AllRunning
-                ? "QA de todas en curso…"
+              {gate2AllRunning || isRunning("gate2-all")
+                ? "Corriendo…"
                 : "QA de todas las clases (Gate 2)"}
             </button>
-            {gate2AllRunning && (
+            {(gate2AllRunning || isRunning("gate2-all")) && (
               <span className="badge badge-neutral">
                 {gate2Done.length}/{completedRenders.length} con veredicto
               </span>
@@ -2530,8 +2619,12 @@ export default function JobPage() {
 
           {completedRenders.map((render) => {
             const verdict = gate2Verdicts?.[render.lessonId] ?? null;
-            const running =
+            // Nota: candado run-lock de gate2 es a nivel de job (no por
+            // lección), así que isRunning("gate2") aplica al deshabilitar
+            // cualquier fila mientras cualquier gate2 esté en curso.
+            const runningLesson =
               gate2Loading === render.lessonId ||
+              isRunning("gate2") ||
               Boolean(gatePollTimersRef.current[`gate2:${render.lessonId}`]);
             const error = gate2Errors[render.lessonId];
             return (
@@ -2540,13 +2633,18 @@ export default function JobPage() {
                   {lessonTitles.get(render.lessonId) ?? render.lessonId}
                 </span>
                 <span className="qa-lesson-controls">
-                  {verdict === null && !running && (
+                  {verdict === null && !runningLesson && (
                     <span className="badge badge-neutral">sin QA</span>
                   )}
-                  {running && (
+                  {runningLesson && (
                     <span className="badge badge-neutral">
                       <span className="spinner spinner-inline" />
-                      juzgando…
+                      {gate2Loading === render.lessonId ||
+                      Boolean(
+                        gatePollTimersRef.current[`gate2:${render.lessonId}`]
+                      )
+                        ? "juzgando…"
+                        : "Corriendo…"}
                     </span>
                   )}
                   {verdict?.verdict === "APPROVED" && (
@@ -2561,7 +2659,7 @@ export default function JobPage() {
                     className="btn btn-secondary"
                     type="button"
                     onClick={() => handleGate2(render.lessonId)}
-                    disabled={running || gate2AllRunning}
+                    disabled={runningLesson || gate2AllRunning || isRunning("gate2-all")}
                   >
                     {verdict ? "Re-correr QA" : "QA visual"}
                   </button>
@@ -2599,21 +2697,28 @@ export default function JobPage() {
               </h3>
               {modules.map((module) => {
                 const verdict = gate3Verdicts?.[module.id] ?? null;
-                const running =
+                // Nota: candado run-lock de gate3 es a nivel de job (no por
+                // módulo), así que isRunning("gate3") deshabilita cualquier
+                // fila mientras cualquier gate3 esté en curso.
+                const runningModule =
                   gate3Loading === module.id ||
+                  isRunning("gate3") ||
                   Boolean(gatePollTimersRef.current[`gate3:${module.id}`]);
                 const error = gate3Errors[module.id];
                 return (
                   <div className="row qa-lesson-row" key={module.id}>
                     <span className="qa-lesson-name">{module.title}</span>
                     <span className="qa-lesson-controls">
-                      {verdict === null && !running && (
+                      {verdict === null && !runningModule && (
                         <span className="badge badge-neutral">sin revisión</span>
                       )}
-                      {running && (
+                      {runningModule && (
                         <span className="badge badge-neutral">
                           <span className="spinner spinner-inline" />
-                          revisando…
+                          {gate3Loading === module.id ||
+                          Boolean(gatePollTimersRef.current[`gate3:${module.id}`])
+                            ? "revisando…"
+                            : "Corriendo…"}
                         </span>
                       )}
                       {verdict?.verdict === "APPROVED" && (
@@ -2628,7 +2733,7 @@ export default function JobPage() {
                         className="btn btn-secondary"
                         type="button"
                         onClick={() => handleGate3(module.id)}
-                        disabled={running}
+                        disabled={runningModule}
                       >
                         {verdict ? "Re-revisar" : "Revisar módulo"}
                       </button>
@@ -2678,10 +2783,10 @@ export default function JobPage() {
               className="btn"
               type="button"
               onClick={handlePackage}
-              disabled={!canPackage || packaging}
+              disabled={!canPackage || packaging || isRunning("package")}
             >
-              {packaging
-                ? "Empaquetando…"
+              {packaging || isRunning("package")
+                ? "Corriendo…"
                 : packageManifest
                   ? "Re-empaquetar curso"
                   : "Empaquetar curso"}

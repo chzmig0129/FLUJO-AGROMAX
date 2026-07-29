@@ -10,6 +10,15 @@
  *
  * Nota: esta ruta es solo lectura. Nunca toca jobs/<id>/source/, que es
  * inmutable una vez creada la ingesta (ver invariante en src/lib/jobs.ts).
+ *
+ * `running`: candado anti-duplicados (run-lock, ver src/lib/run-lock.ts) —
+ * lista los nombres de etapa de agente en vuelo para este job (por ejemplo
+ * "overlay-briefs", "gate1"), para que el wizard pueda deshabilitar el botón
+ * correspondiente y mostrar "Corriendo…" aunque el usuario haya recargado la
+ * página o la corrida se haya disparado desde otra pestaña. Además incluye
+ * "plan"/"prep"/"assemble" cuando `isPipelineRunning` (el candado job-level
+ * de src/lib/pipeline.ts, ya existente) está activo, inferido del status
+ * actual del job.
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -33,6 +42,23 @@ import {
   readVerdictsJson,
   transcriptsDir,
 } from "@/lib/jobs";
+import { isPipelineRunning } from "@/lib/pipeline";
+import { runningStages } from "@/lib/run-lock";
+import type { JobStatus } from "@/lib/types";
+
+/**
+ * Mapea el status "en curso" de un job al nombre de etapa correspondiente,
+ * para poder reportarlo en `running` cuando `isPipelineRunning` está activo
+ * (candado job-level de pipeline.ts, que no distingue etapa por nombre).
+ */
+const RUNNING_STATUS_TO_STAGE: Partial<Record<JobStatus, string>> = {
+  probing: "probe",
+  transcribing: "transcribe",
+  sampling: "frames",
+  planning: "plan",
+  preparing: "prep",
+  assembling: "assemble",
+};
 
 export const runtime = "nodejs";
 
@@ -260,8 +286,22 @@ export async function GET(
     // curso todavía no fue empaquetado.
     const packageManifest = await readPackageManifest(jobId);
 
+    // Etapas en vuelo (candado anti-duplicados): las del run-lock stage-level
+    // más, si aplica, la etapa correspondiente al candado job-level de
+    // pipeline.ts (isPipelineRunning), inferida del status actual del job.
+    const running = runningStages(jobId);
+    const pipelineStage = RUNNING_STATUS_TO_STAGE[job.status];
+    if (
+      pipelineStage &&
+      isPipelineRunning(jobId) &&
+      !running.includes(pipelineStage)
+    ) {
+      running.push(pipelineStage);
+    }
+
     return NextResponse.json({
       job,
+      running,
       media,
       progress,
       summary,

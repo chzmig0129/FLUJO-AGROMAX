@@ -12,14 +12,20 @@
  * `/api/jobs/[jobId]/prep` y `/api/jobs/[jobId]/gate2`. `runPackageStage`
  * valida por su cuenta, de forma más estricta, que CADA clase de la
  * estructura tenga su render antes de copiarlo.
+ *
+ * Candado anti-duplicados (run-lock): 409 si el empaquetado ya está
+ * corriendo para este job.
  */
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { NextResponse } from "next/server";
 import { readJobJson, renderDir } from "@/lib/jobs";
 import { runPackageStage } from "@/lib/package-stage";
+import { release, tryAcquire } from "@/lib/run-lock";
 
 export const runtime = "nodejs";
+
+const STAGE = "package";
 
 /** Verifica (tolerante) si `render/` tiene al menos un .mp4. */
 async function hasAnyRender(jobId: string): Promise<boolean> {
@@ -47,17 +53,32 @@ export async function POST(
     );
   }
 
-  if (!(await hasAnyRender(jobId))) {
+  if (!tryAcquire(jobId, STAGE)) {
     return NextResponse.json(
-      {
-        error: `No se puede empaquetar: el job '${jobId}' todavía no tiene ningún render en 'render/' (falta ensamblar al menos una clase primero).`,
-      },
-      { status: 400 }
+      { error: "Esta etapa ya está corriendo" },
+      { status: 409 }
     );
   }
 
-  // Fire-and-forget: no se espera a que termine el empaquetado para responder.
-  runPackageStage(jobId).catch(console.error);
+  let started = false;
+  try {
+    if (!(await hasAnyRender(jobId))) {
+      return NextResponse.json(
+        {
+          error: `No se puede empaquetar: el job '${jobId}' todavía no tiene ningún render en 'render/' (falta ensamblar al menos una clase primero).`,
+        },
+        { status: 400 }
+      );
+    }
 
-  return NextResponse.json({ ok: true });
+    started = true;
+    // Fire-and-forget: no se espera a que termine el empaquetado para responder.
+    runPackageStage(jobId)
+      .catch(console.error)
+      .finally(() => release(jobId, STAGE));
+
+    return NextResponse.json({ ok: true });
+  } finally {
+    if (!started) release(jobId, STAGE);
+  }
 }

@@ -10,12 +10,18 @@
  * al menos una clase del módulo ya fue ensamblada). Fire-and-forget: no se
  * espera a que termine el gate completo (frames + juez) para responder,
  * mismo patrón que `/api/jobs/[jobId]/gate2`.
+ *
+ * Candado anti-duplicados (run-lock): 409 si Gate 3 ya está corriendo para
+ * este job.
  */
 import { NextResponse } from "next/server";
 import { readJobJson } from "@/lib/jobs";
 import { listRenderedLessonsInModule, runGate3Stage } from "@/lib/gate3-stage";
+import { release, tryAcquire } from "@/lib/run-lock";
 
 export const runtime = "nodejs";
+
+const STAGE = "gate3";
 
 export async function POST(
   request: Request,
@@ -52,18 +58,33 @@ export async function POST(
     );
   }
 
-  const renderedLessons = await listRenderedLessonsInModule(jobId, moduleId);
-  if (renderedLessons.length === 0) {
+  if (!tryAcquire(jobId, STAGE)) {
     return NextResponse.json(
-      {
-        error: `No se puede correr Gate 3: el módulo '${moduleId}' no existe en la estructura del job, o ninguna de sus lecciones tiene todavía 'render/<lessonId>.mp4' (falta ensamblar al menos una clase del módulo primero).`,
-      },
-      { status: 400 }
+      { error: "Esta etapa ya está corriendo" },
+      { status: 409 }
     );
   }
 
-  // Fire-and-forget: no se espera a que termine Gate 3 para responder.
-  runGate3Stage(jobId, moduleId).catch(console.error);
+  let started = false;
+  try {
+    const renderedLessons = await listRenderedLessonsInModule(jobId, moduleId);
+    if (renderedLessons.length === 0) {
+      return NextResponse.json(
+        {
+          error: `No se puede correr Gate 3: el módulo '${moduleId}' no existe en la estructura del job, o ninguna de sus lecciones tiene todavía 'render/<lessonId>.mp4' (falta ensamblar al menos una clase del módulo primero).`,
+        },
+        { status: 400 }
+      );
+    }
 
-  return NextResponse.json({ ok: true });
+    started = true;
+    // Fire-and-forget: no se espera a que termine Gate 3 para responder.
+    runGate3Stage(jobId, moduleId)
+      .catch(console.error)
+      .finally(() => release(jobId, STAGE));
+
+    return NextResponse.json({ ok: true });
+  } finally {
+    if (!started) release(jobId, STAGE);
+  }
 }

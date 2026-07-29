@@ -9,12 +9,18 @@
  * responde de inmediato. No exige ningún `job.status` específico más allá
  * del prerequisito real en disco (la auditoría de captions es independiente
  * del estado general del pipeline).
+ *
+ * Candado anti-duplicados (run-lock): 409 si esta etapa ya está corriendo
+ * para este job.
  */
 import { NextResponse } from "next/server";
 import { readJobJson } from "@/lib/jobs";
 import { hasCaptionsToAudit, runCaptionsAuditStage } from "@/lib/captions-audit-stage";
+import { release, tryAcquire } from "@/lib/run-lock";
 
 export const runtime = "nodejs";
+
+const STAGE = "audit-captions";
 
 export async function POST(
   request: Request,
@@ -31,18 +37,33 @@ export async function POST(
     );
   }
 
-  if (!(await hasCaptionsToAudit(jobId))) {
+  if (!tryAcquire(jobId, STAGE)) {
     return NextResponse.json(
-      {
-        error:
-          "No se puede auditar subtítulos: el proyecto no tiene 'plan/captions/' con al menos un archivo generado.",
-      },
-      { status: 400 }
+      { error: "Esta etapa ya está corriendo" },
+      { status: 409 }
     );
   }
 
-  // Fire-and-forget: no se espera a que termine la auditoría para responder.
-  runCaptionsAuditStage(jobId).catch(console.error);
+  let started = false;
+  try {
+    if (!(await hasCaptionsToAudit(jobId))) {
+      return NextResponse.json(
+        {
+          error:
+            "No se puede auditar subtítulos: el proyecto no tiene 'plan/captions/' con al menos un archivo generado.",
+        },
+        { status: 400 }
+      );
+    }
 
-  return NextResponse.json({ ok: true });
+    started = true;
+    // Fire-and-forget: no se espera a que termine la auditoría para responder.
+    runCaptionsAuditStage(jobId)
+      .catch(console.error)
+      .finally(() => release(jobId, STAGE));
+
+    return NextResponse.json({ ok: true });
+  } finally {
+    if (!started) release(jobId, STAGE);
+  }
 }

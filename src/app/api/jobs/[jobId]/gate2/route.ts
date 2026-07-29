@@ -10,6 +10,11 @@
  * muestrear de un video que no existe). Fire-and-forget: no se espera a que
  * termine el gate completo (frames + juez) para responder, mismo patrón que
  * `/api/jobs/[jobId]/prep`.
+ *
+ * Candado anti-duplicados (run-lock): 409 si Gate 2 ya está corriendo para
+ * este job (a nivel de job, no por lección: dos lecciones distintas del
+ * mismo job no pueden auditarse en paralelo tampoco, para no saturar la CPU
+ * con dos procesos `claude` simultáneos del mismo job).
  */
 import path from "node:path";
 import { promises as fs } from "node:fs";
@@ -17,8 +22,11 @@ import { NextResponse } from "next/server";
 import { readJobJson, jobPath } from "@/lib/jobs";
 import { runGate2FramesStage } from "@/lib/gate2-frames-stage";
 import { runGate2Stage } from "@/lib/gate2-stage";
+import { release, tryAcquire } from "@/lib/run-lock";
 
 export const runtime = "nodejs";
+
+const STAGE = "gate2";
 
 /** Verifica (tolerante) si `render/<lessonId>.mp4` ya existe. */
 async function hasRenderedLesson(jobId: string, lessonId: string): Promise<boolean> {
@@ -71,17 +79,32 @@ export async function POST(
     );
   }
 
-  if (!(await hasRenderedLesson(jobId, lessonId))) {
+  if (!tryAcquire(jobId, STAGE)) {
     return NextResponse.json(
-      {
-        error: `No se puede correr Gate 2: la lección '${lessonId}' todavía no tiene 'render/${lessonId}.mp4' (falta renderizarla primero).`,
-      },
-      { status: 400 }
+      { error: "Esta etapa ya está corriendo" },
+      { status: 409 }
     );
   }
 
-  // Fire-and-forget: no se espera a que termine Gate 2 para responder.
-  runGate2(jobId, lessonId).catch(console.error);
+  let started = false;
+  try {
+    if (!(await hasRenderedLesson(jobId, lessonId))) {
+      return NextResponse.json(
+        {
+          error: `No se puede correr Gate 2: la lección '${lessonId}' todavía no tiene 'render/${lessonId}.mp4' (falta renderizarla primero).`,
+        },
+        { status: 400 }
+      );
+    }
 
-  return NextResponse.json({ ok: true });
+    started = true;
+    // Fire-and-forget: no se espera a que termine Gate 2 para responder.
+    runGate2(jobId, lessonId)
+      .catch(console.error)
+      .finally(() => release(jobId, STAGE));
+
+    return NextResponse.json({ ok: true });
+  } finally {
+    if (!started) release(jobId, STAGE);
+  }
 }
