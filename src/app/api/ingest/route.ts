@@ -27,11 +27,8 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { NextResponse } from "next/server";
-import { createJobDir, jobPath, sourcePath, writeJobJson } from "@/lib/jobs";
-import { extractVideosFromZip } from "@/lib/zip";
-import { probeAll } from "@/lib/probe";
-import { runPipeline } from "@/lib/pipeline";
-import type { JobJson } from "@/lib/types";
+import { createJobDir, jobPath } from "@/lib/jobs";
+import { ingestFromLocalZip, isKnownZipError } from "@/lib/ingest";
 
 export const runtime = "nodejs";
 
@@ -86,38 +83,18 @@ export async function POST(request: Request): Promise<NextResponse> {
       createWriteStream(uploadZipPath)
     );
 
-    // Extraemos los videos a source/, que queda inmutable desde aquí en
-    // adelante (ver invariante documentada en lib/jobs.ts).
-    await extractVideosFromZip(uploadZipPath, sourcePath(id));
-
-    // El ZIP subido no es parte del job final: solo era un paso intermedio.
-    await fs.rm(uploadZipPath, { force: true });
-
-    const files = await probeAll(sourcePath(id));
-
-    const now = new Date().toISOString();
-    const job: JobJson = {
-      id,
-      name,
-      status: "ingested",
-      stage: "ingest",
-      createdAt: now,
-      updatedAt: now,
-      config: {},
-      files,
-    };
-    await writeJobJson(job);
-
-    // Arrancamos el pipeline (probe + transcripción + muestreo de frames) en
-    // background: no se hace await para no bloquear la respuesta del
-    // ingest. El job queda en 'sampled' y se detiene ahí (modo manual por
-    // defecto): el plan NO se dispara automáticamente, solo vía POST
-    // /api/jobs/[jobId]/plan. Cualquier error se loguea (el pipeline mismo
-    // ya persiste el estado 'error' en el job).
-    runPipeline(id).catch(console.error);
+    const { files } = await ingestFromLocalZip(id, name, uploadZipPath);
 
     return NextResponse.json({ jobId: id, files });
   } catch (err) {
+    // Logueamos el error completo a consola: si el cliente ya se fue (p.ej.
+    // un upload grande cortado a mitad de camino), esta es la única forma de
+    // no perder la causa del fallo (Next no puede reenviarla al cliente).
+    console.error(
+      "Error en POST /api/ingest:",
+      err instanceof Error ? err.stack ?? err.message : err
+    );
+
     // Limpiamos cualquier rastro del job a medio crear.
     await fs.rm(jobPath(id), { recursive: true, force: true });
 
@@ -126,13 +103,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     // Los errores conocidos de zip.ts vienen con mensajes en español y son
     // atribuibles al archivo subido por el usuario (400). Cualquier otro
     // error se trata como fallo interno (500).
-    const isKnownZipError =
-      message === "El archivo ZIP está corrupto o no se pudo leer" ||
-      message === "El ZIP no contiene archivos de video";
-
     return NextResponse.json(
       { error: message },
-      { status: isKnownZipError ? 400 : 500 }
+      { status: isKnownZipError(message) ? 400 : 500 }
     );
   }
 }
