@@ -1,46 +1,28 @@
 "use client";
 
 /**
- * Vista de progreso de un job: pollea GET /api/jobs/<id> cada 2s mientras el
- * pipeline no haya terminado, muestra un stepper de etapas (ingesta → probe →
- * transcripción → muestreo de frames → estructurando/agente), el detalle por
- * archivo durante la transcripción, y al terminar el resumen final con
- * master.txt, la galería de frames por clip y los botones de re-transcribir /
- * re-muestrear.
+ * Wizard del job (frontend v2) — LA herramienta con la que el usuario opera
+ * el pipeline paso a paso (FLUJO-V2.md fase 2).
  *
- * Compat con jobs viejos (creados antes de la etapa de muestreo): si el
- * status queda en 'transcribed' sin que exista manifest de frames, se trata
- * como un estado estable (no un "cargando" perpetuo) y se ofrece el botón
- * "Muestrear frames" para disparar la etapa manualmente. Del mismo modo, un
- * job en 'sampled' sin structure.json todavía (jobs que no llegaron a correr
- * la etapa de plan) es un estado estable: se ofrece el botón "Generar
- * estructura (agente)" para disparar POST /api/jobs/<id>/plan.
+ * Riel vertical de 8 pasos en español:
+ *   1 Subir ZIP        — resumen de lo ingerido (el upload vive en el home).
+ *   2 Transcripción    — probe + whisper + muestreo de frames, X/N en vivo.
+ *   3 Estructura       — agente etapa 4 + GATE HUMANO (aprobar / editar).
+ *   4 Preparación      — silencio, proxies, cortes, captions + auditoría IA.
+ *   5 Overlays         — briefs → imágenes (CDP) → Gate 1 → timeline.
+ *   6 Ensamblaje       — intros + render por clase, reproducción del MP4.
+ *   7 QA               — Gate 2 por clase (o todas) + Gate 3 por módulo.
+ *   8 Entrega          — empaquetado en deliver/ + curso navegable.
  *
- * Cuando ya existe structure.json se muestra la sección de AUDITORÍA
- * solo-lectura de la etapa 4 (filtro editorial + estructura autónoma del
- * agente): árbol de estructura del curso, tarjetas por clip con el veredicto
- * del agente y sus frames, apartados (descartes / otro curso) y
- * decisiones.md. No hay controles de aprobar/bloquear: la etapa corre sin
- * humano en el loop, esto es solo para auditar después.
+ * Cada paso muestra estado (pendiente/en curso/listo/error), progreso X/N en
+ * tiempo real (polling cada 2 s, mismo patrón v1), tiempo transcurrido por
+ * etapa (timestamps de job.json `stages`) y el botón de la siguiente etapa
+ * habilitado SOLO cuando la previa terminó. `run-all` queda escondido como
+ * "modo experto" al pie, con confirmación.
  *
- * Si el job cae en 'error' pero ya tiene frames/manifest.json (los
- * prerequisitos reales del plan), se ofrece además "Reintentar plan (sin
- * re-transcribir)" — útil cuando la falla fue solo de la etapa de plan (ej.
- * ANTHROPIC_API_KEY ausente). El botón "Reintentar pipeline completo" sigue
- * disponible para fallas anteriores (probe/transcribe/frames).
- *
- * Un job en 'planned' es, igual que 'sampled' antes de él, un estado
- * ESTABLE de reposo: se ofrece el botón "Preparar corte (silencio + proxies
- * + cortes)" para disparar POST /api/jobs/<id>/prep (etapas 5A/5B/5C). Una
- * vez que 'preparing' arranca, el 6º paso del stepper muestra un
- * sub-progreso de proxies (X/N) leído de prepProgress.files, y al llegar a
- * 'prepared' se muestra la sección de resultados: tabla de silencio/shrink
- * por clip y, por lección, cantidad de cortes y duración cruda vs.
- * proyectada, con el detalle de cada corte expandible. El botón se vuelve
- * "Re-preparar corte" una vez que ya hay resultados. Si el job cae en
- * 'error' pero ya tiene plan/structure.json (el prerequisito real de la
- * preparación), se ofrece "Reintentar preparación" para reintentar solo
- * 5A/5B/5C sin re-planear.
+ * Todos los endpoints y su semántica (409 corriendo, 400 prerequisito,
+ * fire-and-forget con polling dedicado para los gates) se conservan de la
+ * UI v1 — ver el historial de este archivo para el detalle fino de cada uno.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -58,11 +40,21 @@ import type {
   StructureJson,
   Verdict,
 } from "@/lib/types";
+import { StepCard, StepState } from "@/components/wizard/StepCard";
+import { ProgressBar } from "@/components/wizard/ProgressBar";
+import { StructureEditor } from "@/components/wizard/StructureEditor";
+import {
+  elapsedOf,
+  formatDuration,
+  formatElapsed,
+  formatTimestamp,
+  sumElapsed,
+} from "@/components/wizard/format";
 
-/**
- * Forma de un problema detectado por el Gate 2 (QA visual post-ensamblaje)
- * en uno de los frames de la clase renderizada.
- */
+/* ------------------------------------------------------------------ *
+ * Formas de datos que la API expone y aún no viven en lib/types.
+ * ------------------------------------------------------------------ */
+
 interface Gate2Problema {
   frame: number;
   tipo: string;
@@ -70,7 +62,6 @@ interface Gate2Problema {
   severidad: string;
 }
 
-/** Forma del veredicto del Gate 2 leído de qa/gate2/<lessonId>.json. */
 interface Gate2Verdict {
   lessonId: string;
   auditedAt: string;
@@ -79,7 +70,6 @@ interface Gate2Verdict {
   problemas: Gate2Problema[];
 }
 
-/** Un hallazgo detectado por el Gate 3 (revisión de módulo completo). */
 interface Gate3Hallazgo {
   tipo: string;
   detalle: string;
@@ -87,7 +77,6 @@ interface Gate3Hallazgo {
   lessonId?: string;
 }
 
-/** Forma del veredicto del Gate 3 leído de qa/gate3/<moduleId>.json. */
 interface Gate3Verdict {
   moduleId: string;
   auditedAt: string;
@@ -95,7 +84,6 @@ interface Gate3Verdict {
   hallazgos: Gate3Hallazgo[];
 }
 
-/** Una lección empaquetada, leída de deliver/manifest.json. */
 interface PackageManifestLesson {
   lessonId: string;
   moduleId: string;
@@ -103,14 +91,12 @@ interface PackageManifestLesson {
   notasPath: string;
 }
 
-/** Forma de deliver/manifest.json (empaquetado del curso para entrega). */
 interface PackageManifest {
   packagedAt: string;
   courseDir: string;
   lessons: PackageManifestLesson[];
 }
 
-/** Un brief de overlay generado para una clase. */
 interface OverlayBrief {
   key: string;
   fact: string;
@@ -120,14 +106,12 @@ interface OverlayBrief {
   aspect: string;
 }
 
-/** Forma de plan/overlays/<lessonId>.json (briefs de overlays de una clase). */
 interface OverlayBriefsFile {
   lessonId: string;
   generatedAt: string;
   briefs: OverlayBrief[];
 }
 
-/** Veredicto de una imagen dentro de qa/gate1.json (Gate 1: QA visual por overlay). */
 interface Gate1ImageVerdict {
   key: string;
   verdict: "APPROVED" | "REJECTED";
@@ -137,13 +121,11 @@ interface Gate1ImageVerdict {
   escalar_motivo?: string;
 }
 
-/** Forma de qa/gate1.json (veredicto del Gate 1, uno solo por job). */
 interface Gate1Verdict {
   auditedAt: string;
   images: Gate1ImageVerdict[];
 }
 
-/** Un overlay ya remapeado al timeline de salida de una clase (post-Gate 1). */
 interface OverlayTimelineItem {
   key: string;
   file: string;
@@ -152,14 +134,12 @@ interface OverlayTimelineItem {
   aspect: number;
 }
 
-/** Forma de plan/overlays-timeline/<lessonId>.json (timeline de overlays de una clase). */
 interface OverlayTimelineFile {
   lessonId: string;
   fps: number;
   overlays: OverlayTimelineItem[];
 }
 
-/** Forma del summary.json que arma la etapa de transcripción. */
 interface SummaryFile {
   filename: string;
   narration: boolean;
@@ -178,7 +158,6 @@ interface JobApiResponse {
   summary: SummaryJson | null;
   manifest: FramesManifest | null;
   structure: StructureJson | null;
-  /** Gate humano de la etapa 6: null mientras la estructura no fue aprobada. */
   approval: { approvedAt: string } | null;
   audit: AuditJson | null;
   verdicts: Verdict[] | null;
@@ -187,154 +166,27 @@ interface JobApiResponse {
   cuts: CutsFile[] | null;
   prepProgress: ProgressJson | null;
   assemblyProgress: AssemblyProgressJson | null;
-  /** Sidecars de los renders YA VERIFICADOS como completos (o null si no hay). */
   renders: RenderSidecar[] | null;
-  /** Veredicto del Gate 2 (QA visual) por lección, o null si aún no fue auditada. */
   gate2Verdicts?: Record<string, Gate2Verdict | null>;
-  /** Veredicto del Gate 3 (revisión de módulo) por módulo, o null si aún no fue auditado. */
   gate3Verdicts?: Record<string, Gate3Verdict | null>;
-  /** Manifest de empaquetado del curso (etapa de entrega), o null si aún no fue empaquetado. */
   packageManifest?: PackageManifest | null;
-  /** Briefs de overlays por lección, o null si aún no fueron generados. */
   overlayBriefs?: Record<string, OverlayBriefsFile | null>;
-  /** Veredicto del Gate 1 (QA visual por overlay), o null si aún no corrió. */
   gate1?: Gate1Verdict | null;
-  /** Timeline de overlays por lección, o null si aún no fue calculado. */
   overlaysTimeline?: Record<string, OverlayTimelineFile | null>;
 }
 
 const POLL_INTERVAL_MS = 2000;
 
 /**
- * El juez de Gate 2 (fire-and-forget en el backend) puede tardar hasta
- * GATE2_TIMEOUT_MIN=20min. Como el job queda en un status estable
- * ('assembled') mientras corre, el polling general (startPolling) no lo
- * recoge. Usamos un polling dedicado por lección tras el POST /gate2.
+ * Los jueces de QA (Gates 1/2/3) son fire-and-forget en el backend y el job
+ * queda en un status estable mientras corren, así que el polling general no
+ * los recoge: cada disparo abre un polling dedicado con estos parámetros.
  */
-const GATE2_POLL_INTERVAL_MS = 10_000;
-const GATE2_POLL_TIMEOUT_MS = 25 * 60 * 1000;
+const GATE_POLL_INTERVAL_MS = 10_000;
+const GATE_POLL_TIMEOUT_MS = 25 * 60 * 1000;
+/** gate2-all audita TODAS las clases en secuencia — tope más generoso. */
+const GATE2_ALL_POLL_TIMEOUT_MS = 60 * 60 * 1000;
 
-/**
- * El juez de Gate 3 (revisión de módulo completo, también fire-and-forget
- * en el backend) sigue el mismo patrón que Gate 2: el job se queda en un
- * status estable mientras corre, así que usamos un polling dedicado por
- * módulo tras el POST /gate3, con el mismo intervalo/timeout que Gate 2.
- */
-const GATE3_POLL_INTERVAL_MS = GATE2_POLL_INTERVAL_MS;
-const GATE3_POLL_TIMEOUT_MS = GATE2_POLL_TIMEOUT_MS;
-
-/** Etapas mostradas en el stepper, en orden. */
-type StepKey =
-  | "ingest"
-  | "probe"
-  | "transcribe"
-  | "sample"
-  | "plan"
-  | "prep"
-  | "assemble";
-
-/**
- * Deriva el estado de cada etapa del stepper ('done' | 'active' | 'pending' |
- * 'error') a partir de job.status.
- */
-function stepStatus(
-  step: StepKey,
-  status: JobJson["status"]
-): "done" | "active" | "pending" | "error" {
-  if (status === "error") {
-    // La etapa activa al momento del error es la que falló; las siguientes
-    // quedan pendientes. Sin más info que job.status, marcamos como error
-    // solo la etapa "actual" según el orden esperado y dejamos las previas
-    // como completas.
-    const order: StepKey[] = [
-      "ingest",
-      "probe",
-      "transcribe",
-      "sample",
-      "plan",
-      "prep",
-      "assemble",
-    ];
-    const failedIndex = order.findIndex((s) => s === step);
-    // No sabemos con certeza en qué etapa fue el error; usamos una heurística
-    // simple: si aún no hay media.json asumimos que falló en probe, si ya
-    // hay media.json asumimos que falló en transcribe. Esto se resuelve en
-    // el render con la prop 'media' disponible, así que aquí devolvemos
-    // 'pending' salvo 'ingest' (siempre completada si el job existe).
-    return failedIndex === 0 ? "done" : "pending";
-  }
-
-  if (step === "ingest") {
-    return "done";
-  }
-
-  if (step === "probe") {
-    if (status === "probing") return "active";
-    if (status === "ingested") return "pending";
-    return "done"; // probed, transcribing, transcribed
-  }
-
-  if (step === "transcribe") {
-    if (status === "transcribing") return "active";
-    if (
-      status === "transcribed" ||
-      status === "sampling" ||
-      status === "sampled"
-    )
-      return "done";
-    return "pending"; // ingested, probing, probed
-  }
-
-  if (step === "sample") {
-    if (status === "sampling") return "active";
-    if (
-      status === "sampled" ||
-      status === "planning" ||
-      status === "planned"
-    )
-      return "done";
-    return "pending"; // ingested, probing, probed, transcribing, transcribed
-  }
-
-  if (step === "plan") {
-    if (status === "planning") return "active";
-    if (
-      status === "planned" ||
-      status === "preparing" ||
-      status === "prepared"
-    )
-      return "done";
-    return "pending"; // cualquier etapa previa a 'planning'
-  }
-
-  if (step === "prep") {
-    if (status === "preparing") return "active";
-    if (
-      status === "prepared" ||
-      status === "assembling" ||
-      status === "assembled"
-    )
-      return "done";
-    return "pending"; // cualquier etapa previa a 'preparing'
-  }
-
-  // step === 'assemble' (etapas 9 + 11: intros + ensamblaje headless)
-  if (status === "assembling") return "active";
-  if (status === "assembled") return "done";
-  return "pending"; // cualquier etapa previa a 'assembling'
-}
-
-const STEP_LABELS: Record<StepKey, string> = {
-  ingest: "Ingesta",
-  probe: "Midiendo",
-  transcribe: "Transcribiendo",
-  sample: "Muestreando frames",
-  plan: "Estructurando (agente)",
-  prep: "Preparando corte",
-  assemble: "Ensamblando clases",
-};
-
-/** Etiqueta en español del veredicto del agente para el badge de cada clip. */
 const VERDICT_LABELS: Record<Verdict["verdict"], string> = {
   leccion: "Lección",
   broll: "B-roll",
@@ -342,7 +194,6 @@ const VERDICT_LABELS: Record<Verdict["verdict"], string> = {
   otro_curso: "Otro curso",
 };
 
-/** Clase de color del badge de veredicto, según la paleta existente. */
 const VERDICT_BADGE_CLASS: Record<Verdict["verdict"], string> = {
   leccion: "verdict-badge verdict-badge--leccion",
   broll: "verdict-badge verdict-badge--broll",
@@ -350,25 +201,37 @@ const VERDICT_BADGE_CLASS: Record<Verdict["verdict"], string> = {
   otro_curso: "verdict-badge verdict-badge--otro-curso",
 };
 
-function formatDuration(totalSeconds: number): string {
-  const seconds = Math.round(totalSeconds);
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  const parts: string[] = [];
-  if (h > 0) parts.push(`${h}h`);
-  if (h > 0 || m > 0) parts.push(`${m}m`);
-  parts.push(`${s}s`);
-  return parts.join(" ");
-}
+/** Etiqueta corta del status crudo del job (se muestra bajo el título). */
+const STATUS_LABELS: Record<JobJson["status"], string> = {
+  ingested: "Material ingerido",
+  probing: "Midiendo videos",
+  probed: "Videos medidos",
+  transcribing: "Transcribiendo",
+  transcribed: "Transcripción lista",
+  sampling: "Muestreando frames",
+  sampled: "Listo para estructurar",
+  planning: "Generando estructura",
+  planned: "Estructura generada",
+  preparing: "Preparando corte",
+  prepared: "Corte preparado",
+  assembling: "Ensamblando clases",
+  assembled: "Clases ensambladas",
+  error: "Error",
+};
 
-/** Formatea segundos como mm:ss para el caption de cada miniatura. */
-function formatTimestamp(totalSeconds: number): string {
-  const seconds = Math.round(totalSeconds);
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
+/** A qué paso del wizard pertenece cada etapa de job.stages. */
+const STAGE_TO_STEP: Record<string, number> = {
+  probe: 2,
+  transcribe: 2,
+  frames: 2,
+  plan: 3,
+  silence: 4,
+  proxies: 4,
+  cuts: 4,
+  captions: 4,
+  intros: 6,
+  assembly: 6,
+};
 
 export default function JobPage() {
   const { jobId } = useParams<{ jobId: string }>();
@@ -376,10 +239,17 @@ export default function JobPage() {
   const [data, setData] = useState<JobApiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+
+  // Reloj para los contadores de tiempo transcurrido de etapas en curso.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  /* ---------------- estado por acción (mismos patrones que v1) --------- */
   const [retranscribing, setRetranscribing] = useState(false);
-  const [retranscribeError, setRetranscribeError] = useState<string | null>(
-    null
-  );
+  const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
   const [sampling, setSampling] = useState(false);
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
@@ -389,173 +259,53 @@ export default function JobPage() {
   const [assembling, setAssembling] = useState(false);
   const [assembleError, setAssembleError] = useState<string | null>(null);
 
-  // Gate 2 (QA visual post-ensamblaje): se dispara por lección, así que se
-  // trackea cuál está corriendo y su error por separado.
   const [gate2Loading, setGate2Loading] = useState<string | null>(null);
   const [gate2Errors, setGate2Errors] = useState<Record<string, string>>({});
+  const [gate2AllRunning, setGate2AllRunning] = useState(false);
+  const [gate2AllError, setGate2AllError] = useState<string | null>(null);
 
-  // Gate 3 (revisión de módulo completo): se dispara por moduleId, mismo
-  // patrón que Gate 2 (polling dedicado tras el POST, ver handleGate3).
   const [gate3Loading, setGate3Loading] = useState<string | null>(null);
   const [gate3Errors, setGate3Errors] = useState<Record<string, string>>({});
 
-  // Empaquetado del curso (etapa de entrega): POST síncrono, sin polling
-  // dedicado — al terminar, loadJob() ya trae el manifest actualizado.
   const [packaging, setPackaging] = useState(false);
   const [packageError, setPackageError] = useState<string | null>(null);
 
-  // Modo "corre todo solo" (run-all): dispara el pipeline completo
-  // desatendido (prep -> ... -> package) vía POST /api/jobs/<id>/run-all.
-  // El endpoint responde de inmediato (fire-and-forget en el backend); el
-  // avance real se sigue con el polling general del job (mismo status/
-  // errorMessage que el resto del pipeline), así que acá solo se maneja el
-  // estado del propio click (loading + error del POST en sí).
   const [runningAll, setRunningAll] = useState(false);
   const [runAllError, setRunAllError] = useState<string | null>(null);
 
-  // Generación de briefs de overlays: POST síncrono, sin polling dedicado.
   const [generatingBriefs, setGeneratingBriefs] = useState(false);
-  const [overlayBriefsError, setOverlayBriefsError] = useState<
-    string | null
-  >(null);
-
-  // Generación de las imágenes de los overlays (scraper CDP + composite):
-  // POST síncrono (fire-and-forget en el backend), sin polling dedicado,
-  // mismo patrón que handleOverlayBriefs. Requiere Chrome corriendo con CDP
-  // ya logueado en el Mac donde corre este servidor.
-  const [generatingOverlayImages, setGeneratingOverlayImages] =
-    useState(false);
-  const [overlayGenError, setOverlayGenError] = useState<string | null>(
-    null
-  );
-
-  // Gate 1 (QA visual por overlay, previo al ensamblaje): un solo veredicto
-  // por job (no por lección), fire-and-forget en el backend con polling
-  // dedicado tras el POST, mismo patrón que Gate 2 (ver handleGate2) pero
-  // sin keyear por lessonId.
+  const [overlayBriefsError, setOverlayBriefsError] = useState<string | null>(null);
+  const [generatingOverlayImages, setGeneratingOverlayImages] = useState(false);
+  const [overlayGenError, setOverlayGenError] = useState<string | null>(null);
   const [gate1Loading, setGate1Loading] = useState(false);
   const [gate1Error, setGate1Error] = useState<string | null>(null);
-
-  // Recalcular el timeline de overlays (remapeo post-Gate 1): POST
-  // síncrono (fire-and-forget en el backend, pero es aritmética pura y
-  // rápida), sin polling dedicado, mismo patrón que handleOverlayBriefs.
   const [recalculatingTimeline, setRecalculatingTimeline] = useState(false);
-  const [overlaysTimelineError, setOverlaysTimelineError] = useState<
-    string | null
-  >(null);
+  const [overlaysTimelineError, setOverlaysTimelineError] = useState<string | null>(null);
+
+  // Auditoría de subtítulos (etapa 12, fire-and-forget sin veredicto en la
+  // respuesta del GET): solo se confirma el disparo.
+  const [auditingCaptions, setAuditingCaptions] = useState(false);
+  const [auditCaptionsError, setAuditCaptionsError] = useState<string | null>(null);
+  const [auditCaptionsNotice, setAuditCaptionsNotice] = useState(false);
+
   const [showMaster, setShowMaster] = useState(false);
   const [masterText, setMasterText] = useState<string | null>(null);
   const [masterLoading, setMasterLoading] = useState(false);
   const [masterError, setMasterError] = useState<string | null>(null);
 
-  // Gate humano de la etapa 6: aprobar/editar la estructura antes de preparar.
   const [approving, setApproving] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [editingStructure, setEditingStructure] = useState(false);
-  const [editStructure, setEditStructure] = useState<StructureJson | null>(
-    null
-  );
+  const [editStructure, setEditStructure] = useState<StructureJson | null>(null);
   const [structureJsonText, setStructureJsonText] = useState("");
-  const [structureJsonError, setStructureJsonError] = useState<string | null>(
-    null
-  );
+  const [structureJsonError, setStructureJsonError] = useState<string | null>(null);
   const [savingStructure, setSavingStructure] = useState(false);
-  const [saveStructureError, setSaveStructureError] = useState<string | null>(
-    null
-  );
+  const [saveStructureError, setSaveStructureError] = useState<string | null>(null);
   const [structureSavedNotice, setStructureSavedNotice] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Polling dedicado de Gate 2 por lessonId: ver comentario de
-  // GATE2_POLL_INTERVAL_MS/GATE2_POLL_TIMEOUT_MS arriba.
-  const gate2PollTimersRef = useRef<
-    Record<
-      string,
-      {
-        intervalId: ReturnType<typeof setInterval>;
-        timeoutId: ReturnType<typeof setTimeout>;
-      }
-    >
-  >({});
-
-  const stopGate2Polling = useCallback((lessonId: string) => {
-    const timers = gate2PollTimersRef.current[lessonId];
-    if (timers) {
-      clearInterval(timers.intervalId);
-      clearTimeout(timers.timeoutId);
-      delete gate2PollTimersRef.current[lessonId];
-    }
-  }, []);
-
-  // Polling dedicado de Gate 1: mismo patrón que Gate 2, pero sin keyear por
-  // lessonId porque el veredicto de Gate 1 es uno solo por job.
-  const gate1PollTimerRef = useRef<{
-    intervalId: ReturnType<typeof setInterval>;
-    timeoutId: ReturnType<typeof setTimeout>;
-  } | null>(null);
-
-  const stopGate1Polling = useCallback(() => {
-    if (gate1PollTimerRef.current) {
-      clearInterval(gate1PollTimerRef.current.intervalId);
-      clearTimeout(gate1PollTimerRef.current.timeoutId);
-      gate1PollTimerRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (gate1PollTimerRef.current) {
-        clearInterval(gate1PollTimerRef.current.intervalId);
-        clearTimeout(gate1PollTimerRef.current.timeoutId);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const timersRef = gate2PollTimersRef;
-    return () => {
-      Object.keys(timersRef.current).forEach((lessonId) => {
-        const timers = timersRef.current[lessonId];
-        clearInterval(timers.intervalId);
-        clearTimeout(timers.timeoutId);
-      });
-      timersRef.current = {};
-    };
-  }, []);
-
-  // Polling dedicado de Gate 3 por moduleId: mismo patrón que Gate 2 (ver
-  // comentario de GATE3_POLL_INTERVAL_MS/GATE3_POLL_TIMEOUT_MS arriba).
-  const gate3PollTimersRef = useRef<
-    Record<
-      string,
-      {
-        intervalId: ReturnType<typeof setInterval>;
-        timeoutId: ReturnType<typeof setTimeout>;
-      }
-    >
-  >({});
-
-  const stopGate3Polling = useCallback((moduleId: string) => {
-    const timers = gate3PollTimersRef.current[moduleId];
-    if (timers) {
-      clearInterval(timers.intervalId);
-      clearTimeout(timers.timeoutId);
-      delete gate3PollTimersRef.current[moduleId];
-    }
-  }, []);
-
-  useEffect(() => {
-    const timersRef = gate3PollTimersRef;
-    return () => {
-      Object.keys(timersRef.current).forEach((moduleId) => {
-        const timers = timersRef.current[moduleId];
-        clearInterval(timers.intervalId);
-        clearTimeout(timers.timeoutId);
-      });
-      timersRef.current = {};
-    };
-  }, []);
+  /* ---------------- carga + polling general (cada 2 s) ----------------- */
 
   const loadJob = useCallback(async () => {
     try {
@@ -577,27 +327,10 @@ export default function JobPage() {
   }, [jobId]);
 
   /**
-   * Arranca (o reanuda) el ciclo de polling: consulta el job y, si aún no
-   * terminó (status distinto de 'sampled'/'error'), programa la siguiente
-   * consulta 2s después. Se usa tanto al montar como después de disparar
-   * una re-transcripción o un (re)muestreo de frames.
-   *
-   * Nota: el status 'transcribed' NO se considera terminal en general — el
-   * pipeline nuevo lo atraviesa de forma transitoria camino a 'sampling'.
-   * Pero un job estancado en 'transcribed' sin manifest (jobs viejos, o
-   * mientras el usuario no dispara el muestreo) es un estado ESTABLE: nada
-   * lo va a mover sin acción del usuario, así que ahí SÍ paramos el polling
-   * en segundo plano para no pegarle a la API cada 2s indefinidamente. El
-   * botón "Muestrear frames" (handleSample) reanuda el polling al hacer el
-   * POST que dispara la etapa.
-   *
-   * Lo mismo aplica a 'sampled': es estable mientras el usuario no dispare
-   * la etapa de plan (handlePlan reanuda el polling). Una vez que 'planning'
-   * arranca, el polling sigue hasta 'planned' o 'error'.
-   *
-   * Y lo mismo aplica a 'planned': es estable mientras el usuario no
-   * dispare la preparación (handlePrep reanuda el polling). Una vez que
-   * 'preparing' arranca, el polling sigue hasta 'prepared' o 'error'.
+   * Ciclo de polling: consulta el job y, si está en un estado transitorio,
+   * re-programa la consulta 2 s después. Los estados estables (sampled,
+   * planned, prepared, assembled, error, o 'transcribed' sin manifest) NO
+   * siguen polleando — cada botón que dispara una etapa reanuda el ciclo.
    */
   const startPolling = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -640,6 +373,69 @@ export default function JobPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
 
+  /* ---------------- pollings dedicados de los gates -------------------- */
+
+  const gatePollTimersRef = useRef<
+    Record<
+      string,
+      {
+        intervalId: ReturnType<typeof setInterval>;
+        timeoutId: ReturnType<typeof setTimeout>;
+      }
+    >
+  >({});
+
+  const stopGatePolling = useCallback((key: string) => {
+    const timers = gatePollTimersRef.current[key];
+    if (timers) {
+      clearInterval(timers.intervalId);
+      clearTimeout(timers.timeoutId);
+      delete gatePollTimersRef.current[key];
+    }
+  }, []);
+
+  useEffect(() => {
+    const timersRef = gatePollTimersRef;
+    return () => {
+      Object.values(timersRef.current).forEach((timers) => {
+        clearInterval(timers.intervalId);
+        clearTimeout(timers.timeoutId);
+      });
+      timersRef.current = {};
+    };
+  }, []);
+
+  /**
+   * Abre un polling dedicado (cada GATE_POLL_INTERVAL_MS) que refetchea el
+   * job hasta que `isDone(body)` sea true o venza `timeoutMs`. Un solo
+   * mecanismo para Gates 1/2/3 y gate2-all.
+   */
+  const startGatePolling = useCallback(
+    (
+      key: string,
+      isDone: (body: JobApiResponse | null) => boolean,
+      timeoutMs: number,
+      onStop?: () => void
+    ) => {
+      stopGatePolling(key);
+      const intervalId = setInterval(async () => {
+        const body = await loadJob();
+        if (isDone(body)) {
+          stopGatePolling(key);
+          onStop?.();
+        }
+      }, GATE_POLL_INTERVAL_MS);
+      const timeoutId = setTimeout(() => {
+        stopGatePolling(key);
+        onStop?.();
+      }, timeoutMs);
+      gatePollTimersRef.current[key] = { intervalId, timeoutId };
+    },
+    [loadJob, stopGatePolling]
+  );
+
+  /* ---------------- acciones por etapa --------------------------------- */
+
   const handleRetranscribe = useCallback(async () => {
     setRetranscribeError(null);
     setRetranscribing(true);
@@ -655,7 +451,6 @@ export default function JobPage() {
         setRetranscribeError("No se pudo iniciar la re-transcripción.");
         return;
       }
-      // Reanuda el polling de inmediato para reflejar el nuevo status.
       startPolling();
     } catch {
       setRetranscribeError("No se pudo iniciar la re-transcripción.");
@@ -664,18 +459,11 @@ export default function JobPage() {
     }
   }, [jobId, startPolling]);
 
-  /**
-   * Dispara (o re-dispara) la etapa de muestreo de frames vía
-   * POST /api/jobs/<id>/frames. Maneja 409 (pipeline ya corriendo) y 400
-   * (status del job no permite muestrear todavía) con mensajes específicos.
-   */
   const handleSample = useCallback(async () => {
     setSampleError(null);
     setSampling(true);
     try {
-      const res = await fetch(`/api/jobs/${jobId}/frames`, {
-        method: "POST",
-      });
+      const res = await fetch(`/api/jobs/${jobId}/frames`, { method: "POST" });
       if (res.status === 409) {
         setSampleError("El proyecto ya se está procesando.");
         return;
@@ -691,7 +479,6 @@ export default function JobPage() {
         setSampleError("No se pudo iniciar el muestreo de frames.");
         return;
       }
-      // Reanuda el polling de inmediato para reflejar el nuevo status.
       startPolling();
     } catch {
       setSampleError("No se pudo iniciar el muestreo de frames.");
@@ -700,19 +487,11 @@ export default function JobPage() {
     }
   }, [jobId, startPolling]);
 
-  /**
-   * Dispara (o re-dispara) la etapa de plan (filtro editorial + estructura
-   * autónoma del agente) vía POST /api/jobs/<id>/plan. Maneja 409 (pipeline
-   * ya corriendo) y 400 (status del job no permite planear todavía) con
-   * mensajes específicos.
-   */
   const handlePlan = useCallback(async () => {
     setPlanError(null);
     setPlanning(true);
     try {
-      const res = await fetch(`/api/jobs/${jobId}/plan`, {
-        method: "POST",
-      });
+      const res = await fetch(`/api/jobs/${jobId}/plan`, { method: "POST" });
       if (res.status === 409) {
         setPlanError("El proyecto ya se está procesando.");
         return;
@@ -728,7 +507,6 @@ export default function JobPage() {
         setPlanError("No se pudo iniciar la generación de la estructura.");
         return;
       }
-      // Reanuda el polling de inmediato para reflejar el nuevo status.
       startPolling();
     } catch {
       setPlanError("No se pudo iniciar la generación de la estructura.");
@@ -737,17 +515,11 @@ export default function JobPage() {
     }
   }, [jobId, startPolling]);
 
-  /**
-   * Aprueba la estructura (gate humano de la etapa 6) vía
-   * POST /api/jobs/<id>/approve. Refetchea el job para reflejar approval.
-   */
   const handleApprove = useCallback(async () => {
     setApproveError(null);
     setApproving(true);
     try {
-      const res = await fetch(`/api/jobs/${jobId}/approve`, {
-        method: "POST",
-      });
+      const res = await fetch(`/api/jobs/${jobId}/approve`, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         setApproveError(body?.error ?? "No se pudo aprobar la estructura.");
@@ -761,7 +533,8 @@ export default function JobPage() {
     }
   }, [jobId, loadJob]);
 
-  /** Entra en modo edición: clona la estructura actual como working copy. */
+  /* -------- edición de estructura (gate humano) ------------------------ */
+
   const handleStartEdit = useCallback((structure: StructureJson) => {
     const clone: StructureJson = JSON.parse(JSON.stringify(structure));
     setEditStructure(clone);
@@ -772,7 +545,6 @@ export default function JobPage() {
     setEditingStructure(true);
   }, []);
 
-  /** Sale del modo edición sin guardar; descarta la working copy. */
   const handleCancelEdit = useCallback(() => {
     setEditingStructure(false);
     setEditStructure(null);
@@ -781,7 +553,6 @@ export default function JobPage() {
     setSaveStructureError(null);
   }, []);
 
-  /** Actualiza el título de un módulo en la working copy. */
   const handleModuleTitleChange = useCallback(
     (moduleId: string, title: string) => {
       setEditStructure((prev) => {
@@ -799,7 +570,6 @@ export default function JobPage() {
     []
   );
 
-  /** Actualiza el título de una lección en la working copy. */
   const handleLessonTitleChange = useCallback(
     (moduleId: string, lessonId: string, title: string) => {
       setEditStructure((prev) => {
@@ -824,11 +594,6 @@ export default function JobPage() {
     []
   );
 
-  /**
-   * Mueve una lección un lugar hacia arriba/abajo dentro de su módulo,
-   * intercambiando el campo `order` con el vecino adyacente (según el orden
-   * de despliegue actual).
-   */
   const handleReorderLesson = useCallback(
     (moduleId: string, lessonId: string, direction: -1 | 1) => {
       setEditStructure((prev) => {
@@ -864,7 +629,6 @@ export default function JobPage() {
     []
   );
 
-  /** Mueve una lección de un módulo a otro (select), al final del destino. */
   const handleMoveLessonToModule = useCallback(
     (fromModuleId: string, lessonId: string, toModuleId: string) => {
       if (fromModuleId === toModuleId) return;
@@ -902,7 +666,6 @@ export default function JobPage() {
     []
   );
 
-  /** Aplica el JSON crudo del textarea como nueva working copy. */
   const handleApplyStructureJson = useCallback(() => {
     try {
       const parsed = JSON.parse(structureJsonText) as StructureJson;
@@ -913,11 +676,6 @@ export default function JobPage() {
     }
   }, [structureJsonText]);
 
-  /**
-   * Guarda la working copy vía PUT /api/jobs/<id>/structure. Al guardar, la
-   * aprobación previa queda invalidada (approval vuelve a null en el
-   * servidor); se avisa acá con structureSavedNotice.
-   */
   const handleSaveStructure = useCallback(async () => {
     if (!editStructure) return;
     setStructureJsonError(null);
@@ -931,9 +689,7 @@ export default function JobPage() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        setSaveStructureError(
-          body?.error ?? "No se pudo guardar la estructura."
-        );
+        setSaveStructureError(body?.error ?? "No se pudo guardar la estructura.");
         return;
       }
       setEditingStructure(false);
@@ -948,13 +704,8 @@ export default function JobPage() {
     }
   }, [editStructure, jobId, loadJob]);
 
-  /**
-   * Dispara (o re-dispara) las etapas deterministas de preparación (5A
-   * silencio, 5B proxies, 5C cortes) vía POST /api/jobs/<id>/prep. Maneja
-   * 409 (pipeline ya corriendo O estructura no aprobada — el body {force}
-   * salta la validación de aprobación) y 400 (status del job no permite
-   * preparar todavía) con mensajes específicos.
-   */
+  /* -------- preparación / ensamblaje ----------------------------------- */
+
   const handlePrep = useCallback(
     async (force = false) => {
       setPrepError(null);
@@ -979,16 +730,13 @@ export default function JobPage() {
         }
         if (res.status === 400) {
           const body = await res.json().catch(() => null);
-          setPrepError(
-            body?.error ?? "El proyecto todavía no puede prepararse."
-          );
+          setPrepError(body?.error ?? "El proyecto todavía no puede prepararse.");
           return;
         }
         if (!res.ok) {
           setPrepError("No se pudo iniciar la preparación del corte.");
           return;
         }
-        // Reanuda el polling de inmediato para reflejar el nuevo status.
         startPolling();
       } catch {
         setPrepError("No se pudo iniciar la preparación del corte.");
@@ -999,14 +747,6 @@ export default function JobPage() {
     [jobId, startPolling]
   );
 
-  /**
-   * Dispara (o re-dispara) las etapas 9 y 11 (intros + ensamblaje headless)
-   * vía POST /api/jobs/<id>/assemble. `force` re-renderiza todas las clases
-   * aunque ya tengan un render verificado y vigente; sin force, las clases
-   * cuyas entradas no cambiaron se saltan.
-   *
-   * La UI no elige backend: eso lo decide ASSEMBLY_BACKEND en el servidor.
-   */
   const handleAssemble = useCallback(
     async (force = false) => {
       setAssembleError(null);
@@ -1032,7 +772,6 @@ export default function JobPage() {
           setAssembleError("No se pudo iniciar el ensamblaje.");
           return;
         }
-        // Reanuda el polling de inmediato para reflejar el nuevo status.
         startPolling();
       } catch {
         setAssembleError("No se pudo iniciar el ensamblaje.");
@@ -1043,18 +782,33 @@ export default function JobPage() {
     [jobId, startPolling]
   );
 
-  /**
-   * Dispara el QA visual (Gate 2) de una clase ya ensamblada vía
-   * POST /api/jobs/<id>/gate2 {lessonId}. El endpoint es fire-and-forget: el
-   * juez puede tardar hasta GATE2_TIMEOUT_MIN=20min corriendo en background,
-   * y el job se queda en un status estable ('assembled') que el polling
-   * general (startPolling) ya no recoge. Por eso, tras el POST, arrancamos
-   * un polling dedicado para esta lección (cada GATE2_POLL_INTERVAL_MS) que
-   * refetchea el job hasta que gate2Verdicts[lessonId] cambie respecto al
-   * valor que tenía justo al arrancar el polling, con un tope de
-   * GATE2_POLL_TIMEOUT_MS para no quedar corriendo indefinidamente si algo
-   * falla. Se limpia también al desmontar el componente.
-   */
+  /* -------- auditoría de subtítulos (etapa 12) ------------------------- */
+
+  const handleAuditCaptions = useCallback(async () => {
+    setAuditCaptionsError(null);
+    setAuditCaptionsNotice(false);
+    setAuditingCaptions(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/audit-captions`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setAuditCaptionsError(
+          body?.error ?? "No se pudo disparar la auditoría de subtítulos."
+        );
+        return;
+      }
+      setAuditCaptionsNotice(true);
+    } catch {
+      setAuditCaptionsError("No se pudo disparar la auditoría de subtítulos.");
+    } finally {
+      setAuditingCaptions(false);
+    }
+  }, [jobId]);
+
+  /* -------- gates de QA ------------------------------------------------ */
+
   const handleGate2 = useCallback(
     async (lessonId: string) => {
       setGate2Errors((prev) => {
@@ -1081,21 +835,13 @@ export default function JobPage() {
         const previousVerdict = JSON.stringify(
           body?.gate2Verdicts?.[lessonId] ?? null
         );
-
-        stopGate2Polling(lessonId);
-        const intervalId = setInterval(async () => {
-          const nextBody = await loadJob();
-          const nextVerdict = JSON.stringify(
-            nextBody?.gate2Verdicts?.[lessonId] ?? null
-          );
-          if (nextVerdict !== previousVerdict) {
-            stopGate2Polling(lessonId);
-          }
-        }, GATE2_POLL_INTERVAL_MS);
-        const timeoutId = setTimeout(() => {
-          stopGate2Polling(lessonId);
-        }, GATE2_POLL_TIMEOUT_MS);
-        gate2PollTimersRef.current[lessonId] = { intervalId, timeoutId };
+        startGatePolling(
+          `gate2:${lessonId}`,
+          (next) =>
+            JSON.stringify(next?.gate2Verdicts?.[lessonId] ?? null) !==
+            previousVerdict,
+          GATE_POLL_TIMEOUT_MS
+        );
       } catch {
         setGate2Errors((prev) => ({
           ...prev,
@@ -1105,16 +851,52 @@ export default function JobPage() {
         setGate2Loading(null);
       }
     },
-    [jobId, loadJob, stopGate2Polling]
+    [jobId, loadJob, startGatePolling]
   );
 
   /**
-   * Dispara la revisión de módulo completo (Gate 3) vía
-   * POST /api/jobs/<id>/gate3 {moduleId}. Fire-and-forget en el backend,
-   * igual que Gate 2: tras el POST arrancamos un polling dedicado para este
-   * módulo que refetchea el job hasta que gate3Verdicts[moduleId] cambie
-   * respecto al valor que tenía justo al arrancar el polling.
+   * Gate 2 sobre TODAS las clases renderizadas (POST /gate2-all): el
+   * backend audita en secuencia/pool y va dejando qa/gate2/<lessonId>.json.
+   * El polling dedicado termina cuando todos los renders tienen un veredicto
+   * más nuevo que el disparo (o al vencer el tope).
    */
+  const handleGate2All = useCallback(async () => {
+    setGate2AllError(null);
+    setGate2AllRunning(true);
+    const startedAt = Date.now();
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/gate2-all`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setGate2AllError(
+          body?.error ?? "No se pudo correr el QA de todas las clases."
+        );
+        setGate2AllRunning(false);
+        return;
+      }
+      await loadJob();
+      startGatePolling(
+        "gate2-all",
+        (body) => {
+          const rendersNow = body?.renders ?? [];
+          if (rendersNow.length === 0) return false;
+          const fresh = rendersNow.filter((r) => {
+            const v = body?.gate2Verdicts?.[r.lessonId];
+            return v && new Date(v.auditedAt).getTime() >= startedAt - 60_000;
+          });
+          return fresh.length >= rendersNow.length;
+        },
+        GATE2_ALL_POLL_TIMEOUT_MS,
+        () => setGate2AllRunning(false)
+      );
+    } catch {
+      setGate2AllError("No se pudo correr el QA de todas las clases.");
+      setGate2AllRunning(false);
+    }
+  }, [jobId, loadJob, startGatePolling]);
+
   const handleGate3 = useCallback(
     async (moduleId: string) => {
       setGate3Errors((prev) => {
@@ -1133,7 +915,8 @@ export default function JobPage() {
           const body = await res.json().catch(() => null);
           setGate3Errors((prev) => ({
             ...prev,
-            [moduleId]: body?.error ?? "No se pudo correr la revisión de módulo.",
+            [moduleId]:
+              body?.error ?? "No se pudo correr la revisión de módulo.",
           }));
           return;
         }
@@ -1141,21 +924,13 @@ export default function JobPage() {
         const previousVerdict = JSON.stringify(
           body?.gate3Verdicts?.[moduleId] ?? null
         );
-
-        stopGate3Polling(moduleId);
-        const intervalId = setInterval(async () => {
-          const nextBody = await loadJob();
-          const nextVerdict = JSON.stringify(
-            nextBody?.gate3Verdicts?.[moduleId] ?? null
-          );
-          if (nextVerdict !== previousVerdict) {
-            stopGate3Polling(moduleId);
-          }
-        }, GATE3_POLL_INTERVAL_MS);
-        const timeoutId = setTimeout(() => {
-          stopGate3Polling(moduleId);
-        }, GATE3_POLL_TIMEOUT_MS);
-        gate3PollTimersRef.current[moduleId] = { intervalId, timeoutId };
+        startGatePolling(
+          `gate3:${moduleId}`,
+          (next) =>
+            JSON.stringify(next?.gate3Verdicts?.[moduleId] ?? null) !==
+            previousVerdict,
+          GATE_POLL_TIMEOUT_MS
+        );
       } catch {
         setGate3Errors((prev) => ({
           ...prev,
@@ -1165,76 +940,11 @@ export default function JobPage() {
         setGate3Loading(null);
       }
     },
-    [jobId, loadJob, stopGate3Polling]
+    [jobId, loadJob, startGatePolling]
   );
 
-  /**
-   * Empaqueta el curso para entrega vía POST /api/jobs/<id>/package {}. A
-   * diferencia de Gate 2/3, este endpoint responde de forma síncrona (o con
-   * 400 si todavía no hay renders), así que un simple loadJob() tras el
-   * POST alcanza para reflejar el manifest actualizado.
-   */
-  const handlePackage = useCallback(async () => {
-    setPackageError(null);
-    setPackaging(true);
-    try {
-      const res = await fetch(`/api/jobs/${jobId}/package`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        setPackageError(body?.error ?? "No se pudo empaquetar el curso.");
-        return;
-      }
-      await loadJob();
-    } catch {
-      setPackageError("No se pudo empaquetar el curso.");
-    } finally {
-      setPackaging(false);
-    }
-  }, [jobId, loadJob]);
+  /* -------- overlays --------------------------------------------------- */
 
-  /**
-   * Dispara el modo "corre todo solo" (run-all) vía
-   * POST /api/jobs/<id>/run-all {}. Fire-and-forget en el backend: el
-   * endpoint responde de inmediato con ok:true (o 400/409 si todavía no se
-   * puede correr) y la corrida completa avanza en background actualizando
-   * job.status/errorMessage igual que el resto del pipeline, así que un
-   * simple loadJob() tras el POST alcanza para reflejar el arranque; el
-   * polling general de la página (ver el efecto que llama a loadJob) sigue
-   * el resto del avance sin necesidad de un polling dedicado acá.
-   */
-  const handleRunAll = useCallback(async () => {
-    setRunAllError(null);
-    setRunningAll(true);
-    try {
-      const res = await fetch(`/api/jobs/${jobId}/run-all`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        setRunAllError(
-          body?.error ?? "No se pudo iniciar la corrida completa."
-        );
-        return;
-      }
-      await loadJob();
-    } catch {
-      setRunAllError("No se pudo iniciar la corrida completa.");
-    } finally {
-      setRunningAll(false);
-    }
-  }, [jobId, loadJob]);
-
-  /**
-   * Genera los briefs de overlays de todas las lecciones vía
-   * POST /api/jobs/<id>/overlay-briefs {}. Igual que el empaquetado,
-   * responde de forma síncrona, así que un simple loadJob() alcanza.
-   */
   const handleOverlayBriefs = useCallback(async () => {
     setOverlayBriefsError(null);
     setGeneratingBriefs(true);
@@ -1259,14 +969,6 @@ export default function JobPage() {
     }
   }, [jobId, loadJob]);
 
-  /**
-   * Genera las imágenes de los overlays vía POST /api/jobs/<id>/overlay-gen
-   * {}. Requiere Chrome corriendo con depuración remota (CDP, puerto 9222)
-   * YA LOGUEADO en el Mac donde corre este servidor — no funciona en otro
-   * entorno. Fire-and-forget en el backend; igual que handleOverlayBriefs,
-   * responde de forma síncrona (ok:true o error) y un loadJob() alcanza
-   * para reflejar cualquier cambio visible.
-   */
   const handleOverlayGen = useCallback(async () => {
     setOverlayGenError(null);
     setGeneratingOverlayImages(true);
@@ -1285,24 +987,12 @@ export default function JobPage() {
       }
       await loadJob();
     } catch {
-      setOverlayGenError(
-        "No se pudieron generar las imágenes de overlays."
-      );
+      setOverlayGenError("No se pudieron generar las imágenes de overlays.");
     } finally {
       setGeneratingOverlayImages(false);
     }
   }, [jobId, loadJob]);
 
-  /**
-   * Dispara el Gate 1 (QA visual por overlay, previo al ensamblaje) vía
-   * POST /api/jobs/<id>/gate1 {}. Igual que Gate 2 (ver handleGate2), el
-   * endpoint es fire-and-forget y el job se queda en un status estable
-   * mientras el juez corre en background, así que tras el POST arrancamos
-   * un polling dedicado que refetchea el job hasta que `gate1` cambie
-   * respecto al valor que tenía justo al arrancar el polling. A diferencia
-   * de Gate 2, el veredicto de Gate 1 es uno solo por job (no por lección),
-   * así que no hace falta keyear el estado.
-   */
   const handleGate1 = useCallback(async () => {
     setGate1Error(null);
     setGate1Loading(true);
@@ -1319,33 +1009,18 @@ export default function JobPage() {
       }
       const body = await loadJob();
       const previousVerdict = JSON.stringify(body?.gate1 ?? null);
-
-      stopGate1Polling();
-      const intervalId = setInterval(async () => {
-        const nextBody = await loadJob();
-        const nextVerdict = JSON.stringify(nextBody?.gate1 ?? null);
-        if (nextVerdict !== previousVerdict) {
-          stopGate1Polling();
-        }
-      }, GATE2_POLL_INTERVAL_MS);
-      const timeoutId = setTimeout(() => {
-        stopGate1Polling();
-      }, GATE2_POLL_TIMEOUT_MS);
-      gate1PollTimerRef.current = { intervalId, timeoutId };
+      startGatePolling(
+        "gate1",
+        (next) => JSON.stringify(next?.gate1 ?? null) !== previousVerdict,
+        GATE_POLL_TIMEOUT_MS
+      );
     } catch {
       setGate1Error("No se pudo correr el Gate 1.");
     } finally {
       setGate1Loading(false);
     }
-  }, [jobId, loadJob, stopGate1Polling]);
+  }, [jobId, loadJob, startGatePolling]);
 
-  /**
-   * Recalcula el timeline de overlays (remapeo post-Gate 1 al timeline de
-   * salida) vía POST /api/jobs/<id>/overlays-timeline {}. Responde de forma
-   * síncrona (fire-and-forget en el backend, pero es aritmética pura y
-   * rápida sobre lo que ya calcularon las etapas previas), así que un
-   * loadJob() tras el POST alcanza, mismo patrón que handleOverlayBriefs.
-   */
   const handleOverlaysTimeline = useCallback(async () => {
     setOverlaysTimelineError(null);
     setRecalculatingTimeline(true);
@@ -1364,13 +1039,58 @@ export default function JobPage() {
       }
       await loadJob();
     } catch {
-      setOverlaysTimelineError(
-        "No se pudo recalcular el timeline de overlays."
-      );
+      setOverlaysTimelineError("No se pudo recalcular el timeline de overlays.");
     } finally {
       setRecalculatingTimeline(false);
     }
   }, [jobId, loadJob]);
+
+  /* -------- entrega / modo experto ------------------------------------- */
+
+  const handlePackage = useCallback(async () => {
+    setPackageError(null);
+    setPackaging(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/package`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setPackageError(body?.error ?? "No se pudo empaquetar el curso.");
+        return;
+      }
+      await loadJob();
+    } catch {
+      setPackageError("No se pudo empaquetar el curso.");
+    } finally {
+      setPackaging(false);
+    }
+  }, [jobId, loadJob]);
+
+  const handleRunAll = useCallback(async () => {
+    setRunAllError(null);
+    setRunningAll(true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/run-all`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        setRunAllError(body?.error ?? "No se pudo iniciar la corrida completa.");
+        return;
+      }
+      await loadJob();
+      startPolling();
+    } catch {
+      setRunAllError("No se pudo iniciar la corrida completa.");
+    } finally {
+      setRunningAll(false);
+    }
+  }, [jobId, loadJob, startPolling]);
 
   const handleToggleMaster = useCallback(async () => {
     const next = !showMaster;
@@ -1394,10 +1114,14 @@ export default function JobPage() {
     }
   }, [jobId, masterLoading, masterText, showMaster]);
 
+  /* ---------------- render --------------------------------------------- */
+
   if (loading) {
     return (
       <main className="container">
-        <h1>Cargando proyecto…</h1>
+        <h1>
+          <span className="spinner spinner-inline" /> Cargando proyecto…
+        </h1>
       </main>
     );
   }
@@ -1406,6 +1130,9 @@ export default function JobPage() {
     return (
       <main className="container">
         <h1>Proyecto no encontrado</h1>
+        <p>
+          <Link href="/">← Volver al inicio</Link>
+        </p>
       </main>
     );
   }
@@ -1432,89 +1159,32 @@ export default function JobPage() {
     gate1,
     overlaysTimeline,
   } = data;
-  const isError = job.status === "error";
-  // El job puede reintentar solo el plan (sin re-transcribir) si falló
-  // estando en 'error' pero ya tiene los prerequisitos del plan generados
-  // en disco: frames/manifest.json (proxy de que probe/transcribe/frames ya
-  // corrieron con éxito). Debe coincidir con el criterio tolerante de
-  // hasPlanPrerequisites en src/lib/pipeline.ts.
-  const canRetryPlanOnly = isError && manifest !== null;
-  // El job puede reintentar solo la preparación (sin re-planear) si falló
-  // estando en 'error' pero ya tiene el prerequisito real de la preparación
-  // generado en disco: plan/structure.json (proxy de que la etapa de plan
-  // terminó). Debe coincidir con el criterio tolerante de
-  // hasPrepPrerequisites en src/lib/pipeline.ts.
-  const canRetryPrepOnly = isError && structure !== null;
-  // El resumen final se muestra en 'transcribed' (jobs viejos o mientras
-  // arranca el muestreo), 'sampled' (frames ya generados), 'planning'/
-  // 'planned' (la etapa de plan corre después del muestreo) y también
-  // 'preparing'/'prepared' (las etapas 5A/5B/5C corren después del plan),
-  // ya que todo lo previo ya está disponible en cualquiera de esos estados.
-  const isDone =
-    job.status === "transcribed" ||
-    job.status === "sampled" ||
-    job.status === "planning" ||
-    job.status === "planned" ||
-    job.status === "preparing" ||
-    job.status === "prepared" ||
-    job.status === "assembling" ||
-    job.status === "assembled";
-  // Compat jobs viejos: sin manifest y sin estar corriendo el muestreo, se
-  // ofrece el botón para dispararlo manualmente en vez de asumir que sigue
-  // "procesando".
-  const canSampleFrames = job.status === "transcribed" && manifest === null;
-  const canResampleFrames = job.status === "sampled";
-  // Compat: un job 'sampled' sin structure.json todavía es un estado
-  // estable — se ofrece el botón para disparar la etapa de plan a demanda.
-  const canPlan = job.status === "sampled" && structure === null;
-  const canReplan = structure !== null;
-  // 'planned' sin cuts todavía es un estado estable — se ofrece el botón
-  // para disparar la preparación (5A/5B/5C) a demanda. Una vez que ya hay
-  // cuts (job 'prepared', o 'preparing' en curso), el botón pasa a
-  // "Re-preparar corte".
-  const canPrep = job.status === "planned" && cuts === null;
-  const canReprep = cuts !== null;
-  // El ensamblaje se ofrece desde que hay cortes en disco: 'prepared' (o
-  // 'assembling'/'assembled' para re-ensamblar), y también en 'error' si los
-  // cortes ya existen (misma tolerancia que hasAssemblyPrerequisites).
-  const canAssemble =
-    cuts !== null &&
-    (job.status === "prepared" ||
-      job.status === "assembling" ||
-      job.status === "assembled" ||
-      job.status === "error");
 
+  const isError = job.status === "error";
+  const stages: NonNullable<JobJson["stages"]> = job.stages ?? {};
+
+  // ¿En qué etapa (de job.stages) quedó colgado el error? La que arrancó y
+  // no terminó. Determina en qué PASO del wizard pintar el error.
+  let failedStageKey: string | null = null;
+  if (isError) {
+    for (const [key, timing] of Object.entries(stages)) {
+      if (timing?.startedAt && !timing.finishedAt) {
+        failedStageKey = key;
+        break;
+      }
+    }
+  }
+  const failedStep = failedStageKey ? STAGE_TO_STEP[failedStageKey] ?? null : null;
+
+  const canRetryPlanOnly = isError && manifest !== null;
+  const canRetryPrepOnly = isError && structure !== null;
+
+  /* ---- progreso / datos derivados (idénticos a v1) ---- */
   const progressFiles = progress?.files ?? {};
   const totalFiles = job.files.length;
   const doneFiles = Object.values(progressFiles).filter(
     (f) => f.status === "done" || f.status === "error"
   ).length;
-
-  // Sub-progreso de proxies (5B) dentro de la etapa 'preparing': cuenta
-  // cuántos clips ya terminaron (done o error) sobre el total de clips que
-  // necesitan proxy, leído de progress/prep-progress.json.
-  // Progreso X/N del ensamblaje (etapas 9+11): una clase cuenta como
-  // terminada cuando quedó 'done', 'skipped' (ya tenía render vigente) o
-  // 'error'. Se lee de progress/assembly-progress.json.
-  const assemblyLessons = Object.entries(assemblyProgress?.lessons ?? {});
-  const assemblyTotal = assemblyProgress?.total ?? 0;
-  const assemblyDone = assemblyLessons.filter(
-    ([, l]) => l.status === "done" || l.status === "skipped" || l.status === "error"
-  ).length;
-  // Solo se ofrece reproducir lo que tiene sidecar 'complete': la existencia
-  // del .mp4 nunca alcanza (ver assembly/verify.ts).
-  const completedRenders = renders ?? [];
-  const rendersByLesson = new Map(completedRenders.map((r) => [r.lessonId, r]));
-  // El empaquetado se ofrece desde que hay al menos un render verificado
-  // (el backend responde 400 sin renders — ver POST /package).
-  const canPackage = completedRenders.length > 0;
-  // Título legible por lección, para las tarjetas de reproducción.
-  const lessonTitles = new Map<string, string>();
-  for (const module of structure?.modules ?? []) {
-    for (const lesson of module.lessons) {
-      lessonTitles.set(lesson.id, lesson.title);
-    }
-  }
 
   const prepFiles = prepProgress?.files ?? {};
   const prepTotalFiles = Object.keys(prepFiles).length;
@@ -1522,15 +1192,184 @@ export default function JobPage() {
     (f) => f.status === "done" || f.status === "error"
   ).length;
 
+  const assemblyLessons = Object.entries(assemblyProgress?.lessons ?? {});
+  const assemblyTotal = assemblyProgress?.total ?? 0;
+  const assemblyDone = assemblyLessons.filter(
+    ([, l]) =>
+      l.status === "done" || l.status === "skipped" || l.status === "error"
+  ).length;
+
+  const completedRenders = renders ?? [];
+  const rendersByLesson = new Map(completedRenders.map((r) => [r.lessonId, r]));
+  const canPackage = completedRenders.length > 0;
+
+  const lessonTitles = new Map<string, string>();
+  const allLessonIds: string[] = [];
+  for (const module of structure?.modules ?? []) {
+    for (const lesson of module.lessons) {
+      lessonTitles.set(lesson.id, lesson.title);
+      allLessonIds.push(lesson.id);
+    }
+  }
+
   const totalDuration = media
     ? media.reduce((acc, m) => acc + m.durationSeconds, 0)
     : job.files.reduce((acc, f) => acc + f.durationSeconds, 0);
 
   const brollFiles = summary?.files.filter((f) => !f.narration) ?? [];
 
+  const briefsEntries = Object.entries(overlayBriefs ?? {}).filter(
+    ([, f]) => f !== null
+  );
+  const timelineEntries = Object.entries(overlaysTimeline ?? {}).filter(
+    ([, f]) => f !== null
+  );
+  const gate1Rejected = gate1?.images.filter((i) => i.verdict === "REJECTED") ?? [];
+
+  const gate2Done = completedRenders.filter(
+    (r) => (gate2Verdicts?.[r.lessonId] ?? null) !== null
+  );
+  const gate2Rejected = completedRenders.filter(
+    (r) => gate2Verdicts?.[r.lessonId]?.verdict === "REJECTED"
+  );
+  const modules = structure?.modules ?? [];
+  const gate3Done = modules.filter((m) => (gate3Verdicts?.[m.id] ?? null) !== null);
+  const gate3Rejected = modules.filter(
+    (m) => gate3Verdicts?.[m.id]?.verdict === "REJECTED"
+  );
+
+  /* ---- estado de cada paso del wizard ---- */
+
+  // Paso 2 — Transcripción (probe + whisper + frames)
+  const transcribeRunning =
+    job.status === "probing" ||
+    job.status === "transcribing" ||
+    job.status === "sampling";
+  const transcribeDone = manifest !== null;
+  const step2: StepState =
+    isError && failedStep === 2
+      ? "error"
+      : transcribeRunning
+        ? "corriendo"
+        : transcribeDone
+          ? "listo"
+          : "pendiente";
+
+  // Paso 3 — Estructura (agente + gate humano)
+  const step3: StepState =
+    isError && failedStep === 3
+      ? "error"
+      : job.status === "planning"
+        ? "corriendo"
+        : structure && approval
+          ? "listo"
+          : structure
+            ? "atencion"
+            : transcribeDone
+              ? "pendiente"
+              : "bloqueado";
+
+  // Paso 4 — Preparación (5A/5B/5C + captions)
+  const step4: StepState =
+    isError && failedStep === 4
+      ? "error"
+      : job.status === "preparing"
+        ? "corriendo"
+        : cuts !== null
+          ? "listo"
+          : structure && approval
+            ? "pendiente"
+            : "bloqueado";
+
+  // Paso 5 — Overlays (briefs → imágenes → Gate 1 → timeline)
+  const overlaysBusy =
+    generatingBriefs ||
+    generatingOverlayImages ||
+    gate1Loading ||
+    recalculatingTimeline ||
+    Boolean(gatePollTimersRef.current["gate1"]);
+  const step5: StepState =
+    cuts === null
+      ? "bloqueado"
+      : overlaysBusy
+        ? "corriendo"
+        : timelineEntries.length > 0
+          ? gate1Rejected.length > 0
+            ? "atencion"
+            : "listo"
+          : "pendiente";
+
+  // Paso 6 — Ensamblaje
+  const step6: StepState =
+    isError && failedStep === 6
+      ? "error"
+      : job.status === "assembling"
+        ? "corriendo"
+        : completedRenders.length > 0 &&
+            allLessonIds.length > 0 &&
+            allLessonIds.every((id) => rendersByLesson.has(id))
+          ? "listo"
+          : cuts !== null
+            ? "pendiente"
+            : "bloqueado";
+
+  // Paso 7 — QA (Gates 2 y 3)
+  const gate7Running =
+    gate2AllRunning ||
+    gate2Loading !== null ||
+    gate3Loading !== null ||
+    Object.keys(gatePollTimersRef.current).some(
+      (k) => k.startsWith("gate2") || k.startsWith("gate3")
+    );
+  const step7: StepState =
+    completedRenders.length === 0
+      ? "bloqueado"
+      : gate7Running
+        ? "corriendo"
+        : gate2Rejected.length > 0 || gate3Rejected.length > 0
+          ? "atencion"
+          : gate2Done.length === completedRenders.length &&
+              modules.length > 0 &&
+              gate3Done.length === modules.length
+            ? "listo"
+            : "pendiente";
+
+  // Paso 8 — Entrega
+  const step8: StepState = packageManifest
+    ? "listo"
+    : packaging
+      ? "corriendo"
+      : canPackage
+        ? "pendiente"
+        : "bloqueado";
+
+  /* ---- tiempos por paso (chips ⏱) ---- */
+  const t2 = formatElapsed(
+    sumElapsed([stages.probe, stages.transcribe, stages.frames], nowMs)
+  );
+  const t3 = formatElapsed(elapsedOf(stages.plan, nowMs));
+  const t4 = formatElapsed(
+    sumElapsed(
+      [stages.silence, stages.proxies, stages.cuts, stages.captions],
+      nowMs
+    )
+  );
+  const t6 = formatElapsed(sumElapsed([stages.intros, stages.assembly], nowMs));
+
   return (
     <main className="container">
-      <h1>Proyecto {job.name}</h1>
+      <div className="job-head">
+        <h1>{job.name}</h1>
+        <span
+          className={`badge ${isError ? "badge-error" : job.status === "assembled" ? "" : "badge-neutral"}`}
+        >
+          {STATUS_LABELS[job.status]}
+        </span>
+      </div>
+      <p className="job-head-sub">
+        {job.files.length} videos · {formatDuration(totalDuration)} de material
+        crudo · creado {new Date(job.createdAt).toLocaleString()}
+      </p>
 
       {isError && (
         <div className="error-banner">
@@ -1546,7 +1385,7 @@ export default function JobPage() {
               >
                 {planning
                   ? "Reintentando plan…"
-                  : "Reintentar plan (sin re-transcribir)"}
+                  : "Reintentar estructura (sin re-transcribir)"}
               </button>
             )}
             {canRetryPrepOnly && (
@@ -1556,7 +1395,9 @@ export default function JobPage() {
                 onClick={() => handlePrep()}
                 disabled={preparing}
               >
-                {preparing ? "Reintentando preparación…" : "Reintentar preparación"}
+                {preparing
+                  ? "Reintentando preparación…"
+                  : "Reintentar preparación"}
               </button>
             )}
             <button
@@ -1565,9 +1406,7 @@ export default function JobPage() {
               onClick={handleRetranscribe}
               disabled={retranscribing}
             >
-              {retranscribing
-                ? "Reintentando…"
-                : "Reintentar pipeline completo"}
+              {retranscribing ? "Reintentando…" : "Reintentar pipeline completo"}
             </button>
           </div>
           {planError && <p className="stepper-error-msg">{planError}</p>}
@@ -1578,226 +1417,222 @@ export default function JobPage() {
         </div>
       )}
 
-      <ol className="stepper">
-        {(
-          [
-            "ingest",
-            "probe",
-            "transcribe",
-            "sample",
-            "plan",
-            "prep",
-            "assemble",
-          ] as StepKey[]
-        ).map((step) => {
-          const status = stepStatus(step, job.status);
-          return (
-            <li key={step} className={`stepper-step stepper-step--${status}`}>
-              <span className="stepper-icon" aria-hidden="true">
-                {status === "done" && "✓"}
-                {status === "active" && <span className="spinner" />}
-                {status === "pending" && "•"}
-              </span>
-              <span className="stepper-label">
-                {STEP_LABELS[step]}
-                {step === "transcribe" &&
-                  job.status === "transcribing" &&
-                  ` (${doneFiles}/${totalFiles})`}
-                {step === "prep" &&
-                  job.status === "preparing" &&
-                  prepTotalFiles > 0 &&
-                  ` (proxies ${prepDoneFiles}/${prepTotalFiles})`}
-                {step === "assemble" &&
-                  job.status === "assembling" &&
-                  assemblyTotal > 0 &&
-                  ` (${assemblyDone}/${assemblyTotal})`}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-
-      {job.status === "transcribing" && (
-        <section>
-          <h2>
-            Transcribiendo archivos ({doneFiles}/{totalFiles})
-          </h2>
+      <ol className="wz">
+        {/* ============ PASO 1 — SUBIR ============ */}
+        <StepCard
+          index={1}
+          title="Subir material"
+          state="listo"
+          desc="El ZIP ya fue recibido, descomprimido y analizado. Los originales no se tocan."
+        >
           <div>
-            {job.files.map((f) => {
-              const fileProgress = progressFiles[f.filename];
-              const status = fileProgress?.status ?? "pending";
-              return (
-                <div className="row" key={f.filename}>
-                  <span>{f.filename}</span>
-                  <span>
-                    {status === "pending" && "pendiente"}
-                    {status === "running" && (
-                      <>
-                        <span className="spinner spinner-inline" /> ⏳
-                        transcribiendo
-                      </>
-                    )}
-                    {status === "done" && "✓"}
-                    {status === "error" && (
-                      <span className="badge badge-error">
-                        error{fileProgress?.error ? `: ${fileProgress.error}` : ""}
-                      </span>
-                    )}
-                  </span>
-                </div>
-              );
-            })}
+            {job.files.map((f) => (
+              <div className="row" key={f.filename}>
+                <span>{f.filename}</span>
+                <span>
+                  {formatDuration(f.durationSeconds)}
+                  {f.issues.includes("no_audio") && (
+                    <span className="badge badge-warning"> sin audio</span>
+                  )}
+                  {f.issues.includes("not_a_video") && (
+                    <span className="badge badge-error"> no es video</span>
+                  )}
+                  {f.issues.includes("zero_duration") && (
+                    <span className="badge badge-error"> duración 0</span>
+                  )}
+                </span>
+              </div>
+            ))}
           </div>
-        </section>
-      )}
+        </StepCard>
 
-      {isDone && (
-        <section>
-          <h2>Resumen</h2>
-          <p>
-            {job.files.length} videos — duración total{" "}
-            {formatDuration(totalDuration)}
-          </p>
+        {/* ============ PASO 2 — TRANSCRIPCIÓN ============ */}
+        <StepCard
+          index={2}
+          title="Transcripción"
+          state={step2}
+          elapsed={t2}
+          progress={
+            job.status === "transcribing"
+              ? {
+                  done: doneFiles,
+                  total: totalFiles,
+                  label: `Transcribiendo ${doneFiles}/${totalFiles} clips`,
+                }
+              : null
+          }
+          desc="Medición técnica de cada clip, transcripción con Whisper y muestreo de frames de referencia. Corre sola al subir el ZIP."
+        >
+          <div>
+            <div className="substage">
+              <span className="substage-icon">
+                {job.status === "probing" ? (
+                  <span className="spinner" />
+                ) : stages.probe?.finishedAt || media ? (
+                  "✓"
+                ) : (
+                  "•"
+                )}
+              </span>
+              <span className="substage-name">Medición (ffprobe)</span>
+              <span className="substage-meta">
+                {formatElapsed(elapsedOf(stages.probe, nowMs)) ?? "—"}
+              </span>
+            </div>
+            <div className="substage">
+              <span className="substage-icon">
+                {job.status === "transcribing" ? (
+                  <span className="spinner" />
+                ) : stages.transcribe?.finishedAt || summary ? (
+                  "✓"
+                ) : (
+                  "•"
+                )}
+              </span>
+              <span className="substage-name">Transcripción</span>
+              <span className="substage-meta">
+                {job.status === "transcribing"
+                  ? `${doneFiles}/${totalFiles} clips`
+                  : (formatElapsed(elapsedOf(stages.transcribe, nowMs)) ?? "—")}
+              </span>
+            </div>
+            <div className="substage">
+              <span className="substage-icon">
+                {job.status === "sampling" ? (
+                  <span className="spinner" />
+                ) : manifest ? (
+                  "✓"
+                ) : (
+                  "•"
+                )}
+              </span>
+              <span className="substage-name">Frames de referencia</span>
+              <span className="substage-meta">
+                {formatElapsed(elapsedOf(stages.frames, nowMs)) ?? "—"}
+              </span>
+            </div>
+          </div>
+
+          {job.status === "transcribing" && (
+            <div style={{ marginTop: "0.75rem" }}>
+              {job.files.map((f) => {
+                const fileProgress = progressFiles[f.filename];
+                const status = fileProgress?.status ?? "pending";
+                return (
+                  <div className="row" key={f.filename}>
+                    <span>{f.filename}</span>
+                    <span>
+                      {status === "pending" && "pendiente"}
+                      {status === "running" && (
+                        <>
+                          <span className="spinner spinner-inline" />
+                          transcribiendo
+                        </>
+                      )}
+                      {status === "done" && "✓"}
+                      {status === "error" && (
+                        <span className="badge badge-error">
+                          error
+                          {fileProgress?.error ? `: ${fileProgress.error}` : ""}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {brollFiles.length > 0 && (
-            <div>
+            <div style={{ marginTop: "0.75rem" }}>
               {brollFiles.map((f) => (
                 <div className="row" key={f.filename}>
                   <span>{f.filename}</span>
-                  <span>🎬 B-roll / sin narración</span>
+                  <span className="badge">B-roll / sin narración</span>
                 </div>
               ))}
             </div>
           )}
 
-          <div className="stepper-actions">
-            <button
-              className="btn"
-              type="button"
-              onClick={handleRetranscribe}
-              disabled={retranscribing}
-            >
-              {retranscribing ? "Re-transcribiendo…" : "Re-transcribir"}
-            </button>
-            {(canSampleFrames || canResampleFrames) && (
+          {transcribeDone && (
+            <>
+              <div className="stepper-actions">
+                <button
+                  className="btn btn-secondary"
+                  type="button"
+                  onClick={handleToggleMaster}
+                >
+                  {showMaster
+                    ? "Ocultar transcripción completa"
+                    : "Ver transcripción completa"}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  onClick={handleRetranscribe}
+                  disabled={retranscribing}
+                >
+                  {retranscribing ? "Re-transcribiendo…" : "Re-transcribir"}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  onClick={handleSample}
+                  disabled={sampling}
+                >
+                  {sampling ? "Muestreando…" : "Re-muestrear frames"}
+                </button>
+              </div>
+              {retranscribeError && (
+                <p className="stepper-error-msg">{retranscribeError}</p>
+              )}
+              {sampleError && <p className="stepper-error-msg">{sampleError}</p>}
+              {showMaster && (
+                <div>
+                  {masterLoading && <p>Cargando master.txt…</p>}
+                  {masterError && (
+                    <p className="stepper-error-msg">{masterError}</p>
+                  )}
+                  {masterText !== null && !masterLoading && (
+                    <pre className="master-pre">{masterText}</pre>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Compat jobs viejos: 'transcribed' sin manifest — disparo manual */}
+          {job.status === "transcribed" && manifest === null && (
+            <div className="stepper-actions">
               <button
-                className="btn btn-secondary"
+                className="btn"
                 type="button"
                 onClick={handleSample}
                 disabled={sampling}
               >
-                {sampling
-                  ? "Muestreando…"
-                  : canResampleFrames
-                    ? "Re-muestrear frames"
-                    : "Muestrear frames"}
+                {sampling ? "Muestreando…" : "Muestrear frames"}
               </button>
-            )}
-            {(canPlan || canReplan) && (
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={handlePlan}
-                disabled={planning}
-              >
-                {planning
-                  ? "Generando estructura…"
-                  : canReplan
-                    ? "Re-generar estructura"
-                    : "Generar estructura (agente)"}
-              </button>
-            )}
-            {(canPrep || canReprep) && (
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={() => handlePrep()}
-                disabled={preparing}
-              >
-                {preparing
-                  ? "Preparando…"
-                  : canReprep
-                    ? "Re-preparar corte"
-                    : "Preparar corte (silencio + proxies + cortes)"}
-              </button>
-            )}
-            {(canPrep || canReprep) && approval === null && (
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      "La estructura todavía no fue aprobada. ¿Preparar el corte de todos modos?"
-                    )
-                  ) {
-                    handlePrep(true);
-                  }
-                }}
-                disabled={preparing}
-              >
-                Preparar sin aprobar
-              </button>
-            )}
-            {canAssemble && (
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={() => handleAssemble(false)}
-                disabled={assembling || job.status === "assembling"}
-              >
-                {assembling || job.status === "assembling"
-                  ? "Ensamblando…"
-                  : "Ensamblar clases (intros + corte)"}
-              </button>
-            )}
-          </div>
-          {retranscribeError && (
-            <p className="stepper-error-msg">{retranscribeError}</p>
+            </div>
           )}
-          {sampleError && <p className="stepper-error-msg">{sampleError}</p>}
-          {planError && <p className="stepper-error-msg">{planError}</p>}
-          {prepError && <p className="stepper-error-msg">{prepError}</p>}
-          {assembleError && (
-            <p className="stepper-error-msg">{assembleError}</p>
-          )}
-
-          <div>
-            <button
-              className="btn btn-secondary"
-              type="button"
-              onClick={handleToggleMaster}
-            >
-              {showMaster
-                ? "Ocultar transcripción completa"
-                : "Ver transcripción completa"}
-            </button>
-            {showMaster && (
-              <div>
-                {masterLoading && <p>Cargando master.txt…</p>}
-                {masterError && <p className="stepper-error-msg">{masterError}</p>}
-                {masterText !== null && !masterLoading && (
-                  <pre className="master-pre">{masterText}</pre>
-                )}
-              </div>
-            )}
-          </div>
 
           {manifest && manifest.clips.length > 0 && (
-            <section className="frames-section">
-              <h2>Frames por clip</h2>
+            <details className="clip-details">
+              <summary className="clip-summary">
+                Frames por clip ({manifest.clips.length} clips)
+              </summary>
               {manifest.clips.map((clip) => (
                 <details className="clip-details" key={clip.filename}>
                   <summary className="clip-summary">
                     <span>{clip.filename}</span>
-                    {!clip.narration && (
-                      <span className="badge">🎬 B-roll</span>
-                    )}
-                    <span className="badge">{clip.frames.length} frames</span>
+                    {!clip.narration && <span className="badge">B-roll</span>}
+                    <span className="badge badge-neutral">
+                      {clip.frames.length} frames
+                    </span>
                   </summary>
                   <div className="frames-grid">
                     {clip.frames.map((frame) => (
                       <figure className="frame-thumb" key={frame.file}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           loading="lazy"
                           src={`/api/jobs/${jobId}/frames/${frame.file}`}
@@ -1811,29 +1646,51 @@ export default function JobPage() {
                   </div>
                 </details>
               ))}
-            </section>
+            </details>
           )}
+        </StepCard>
+
+        {/* ============ PASO 3 — ESTRUCTURA (GATE HUMANO) ============ */}
+        <StepCard
+          index={3}
+          title="Estructura del curso"
+          state={step3}
+          elapsed={t3}
+          desc="El agente editorial propone módulos y clases a partir de la transcripción. Tu aprobación es la puerta para poder cortar."
+          lockedHint="Se habilita cuando la transcripción y el muestreo de frames terminen."
+        >
+          {!structure && (
+            <div className="stepper-actions">
+              <button
+                className="btn"
+                type="button"
+                onClick={handlePlan}
+                disabled={planning || job.status !== "sampled"}
+              >
+                {planning || job.status === "planning"
+                  ? "Generando estructura…"
+                  : "Generar estructura (agente)"}
+              </button>
+            </div>
+          )}
+          {planError && <p className="stepper-error-msg">{planError}</p>}
 
           {structure && (
-            <section className="audit-section">
-              <h2>Auditoría de la estructura (agente)</h2>
-              <p className="audit-hint">
-                Vista de lo que decidió el agente autónomo de la etapa 4.
-                Aprobá la estructura antes de preparar el corte, o editala
-                si hace falta ajustar módulos, clases o su orden.
-              </p>
-
+            <>
               <div className="stepper-actions">
-                <span className="badge">
-                  {approval
-                    ? `Estructura aprobada ${new Date(
-                        approval.approvedAt
-                      ).toLocaleString()}`
-                    : "Pendiente de aprobación"}
-                </span>
-                {approval === null && (
+                {approval ? (
+                  <span className="badge">
+                    ✓ Aprobada{" "}
+                    {new Date(approval.approvedAt).toLocaleString()}
+                  </span>
+                ) : (
+                  <span className="badge badge-warning">
+                    Pendiente de tu aprobación
+                  </span>
+                )}
+                {approval === null && !editingStructure && (
                   <button
-                    className="btn btn-secondary"
+                    className="btn"
                     type="button"
                     onClick={handleApprove}
                     disabled={approving}
@@ -1850,27 +1707,20 @@ export default function JobPage() {
                     Editar
                   </button>
                 )}
-                {approval !== null && (
-                  <button
-                    className="btn btn-secondary"
-                    type="button"
-                    onClick={handleRunAll}
-                    disabled={runningAll}
-                  >
-                    {runningAll
-                      ? "Iniciando corrida completa…"
-                      : "Correr todo (sin intervención)"}
-                  </button>
-                )}
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  onClick={handlePlan}
+                  disabled={planning}
+                >
+                  {planning ? "Re-generando…" : "Re-generar estructura"}
+                </button>
               </div>
               {approveError && (
                 <p className="stepper-error-msg">{approveError}</p>
               )}
-              {runAllError && (
-                <p className="stepper-error-msg">{runAllError}</p>
-              )}
               {structureSavedNotice && !editingStructure && (
-                <p className="stepper-error-msg">
+                <p className="notice-ok">
                   La estructura se guardó: la aprobación quedó pendiente de
                   nuevo.
                 </p>
@@ -1879,188 +1729,21 @@ export default function JobPage() {
               <h3>{structure.courseTitle}</h3>
 
               {editingStructure && editStructure ? (
-                <>
-                  <div className="structure-tree">
-                    {editStructure.modules
-                      .slice()
-                      .sort((a, b) => a.order - b.order)
-                      .map((mod) => (
-                        <div className="structure-module" key={mod.id}>
-                          <div className="field">
-                            <label htmlFor={`mod-title-${mod.id}`}>
-                              Módulo
-                            </label>
-                            <input
-                              id={`mod-title-${mod.id}`}
-                              className="input"
-                              type="text"
-                              value={mod.title}
-                              onChange={(e) =>
-                                handleModuleTitleChange(
-                                  mod.id,
-                                  e.target.value
-                                )
-                              }
-                            />
-                          </div>
-                          {mod.topics.length > 0 && (
-                            <p className="structure-module-topics">
-                              {mod.topics.join(" · ")}
-                            </p>
-                          )}
-                          <ul className="structure-lesson-list">
-                            {mod.lessons
-                              .slice()
-                              .sort((a, b) => a.order - b.order)
-                              .map((lesson, idx, sortedLessons) => (
-                                <li
-                                  className="structure-lesson"
-                                  key={lesson.id}
-                                >
-                                  <div className="field">
-                                    <label
-                                      htmlFor={`lesson-title-${lesson.id}`}
-                                    >
-                                      Clase
-                                    </label>
-                                    <input
-                                      id={`lesson-title-${lesson.id}`}
-                                      className="input"
-                                      type="text"
-                                      value={lesson.title}
-                                      onChange={(e) =>
-                                        handleLessonTitleChange(
-                                          mod.id,
-                                          lesson.id,
-                                          e.target.value
-                                        )
-                                      }
-                                    />
-                                  </div>
-                                  <div className="row">
-                                    <button
-                                      className="btn btn-secondary"
-                                      type="button"
-                                      onClick={() =>
-                                        handleReorderLesson(
-                                          mod.id,
-                                          lesson.id,
-                                          -1
-                                        )
-                                      }
-                                      disabled={idx === 0}
-                                    >
-                                      ↑
-                                    </button>
-                                    <button
-                                      className="btn btn-secondary"
-                                      type="button"
-                                      onClick={() =>
-                                        handleReorderLesson(
-                                          mod.id,
-                                          lesson.id,
-                                          1
-                                        )
-                                      }
-                                      disabled={
-                                        idx === sortedLessons.length - 1
-                                      }
-                                    >
-                                      ↓
-                                    </button>
-                                    <select
-                                      className="select"
-                                      value={mod.id}
-                                      onChange={(e) =>
-                                        handleMoveLessonToModule(
-                                          mod.id,
-                                          lesson.id,
-                                          e.target.value
-                                        )
-                                      }
-                                    >
-                                      {editStructure.modules
-                                        .slice()
-                                        .sort((a, b) => a.order - b.order)
-                                        .map((m2) => (
-                                          <option key={m2.id} value={m2.id}>
-                                            {m2.title}
-                                          </option>
-                                        ))}
-                                    </select>
-                                  </div>
-                                  <ul className="structure-segment-list">
-                                    {lesson.segments.map((seg, idx2) => (
-                                      <li
-                                        className="structure-segment"
-                                        key={`${seg.clip}-${idx2}`}
-                                      >
-                                        <span className="badge">
-                                          {seg.clip}
-                                        </span>{" "}
-                                        <span className="structure-segment-range">
-                                          {formatTimestamp(seg.startSeconds)}–
-                                          {formatTimestamp(seg.endSeconds)}
-                                        </span>{" "}
-                                        <span className="structure-segment-topic">
-                                          {seg.topic}
-                                        </span>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </li>
-                              ))}
-                          </ul>
-                        </div>
-                      ))}
-                  </div>
-
-                  <details className="decisiones-details">
-                    <summary>Editar JSON completo</summary>
-                    <textarea
-                      className="input"
-                      rows={20}
-                      value={structureJsonText}
-                      onChange={(e) => setStructureJsonText(e.target.value)}
-                    />
-                    <div className="stepper-actions">
-                      <button
-                        className="btn btn-secondary"
-                        type="button"
-                        onClick={handleApplyStructureJson}
-                      >
-                        Aplicar JSON
-                      </button>
-                    </div>
-                    {structureJsonError && (
-                      <p className="stepper-error-msg">
-                        {structureJsonError}
-                      </p>
-                    )}
-                  </details>
-
-                  <div className="stepper-actions">
-                    <button
-                      className="btn"
-                      type="button"
-                      onClick={handleSaveStructure}
-                      disabled={savingStructure}
-                    >
-                      {savingStructure ? "Guardando…" : "Guardar"}
-                    </button>
-                    <button
-                      className="btn btn-secondary"
-                      type="button"
-                      onClick={handleCancelEdit}
-                      disabled={savingStructure}
-                    >
-                      Cancelar
-                    </button>
-                  </div>
-                  {saveStructureError && (
-                    <p className="stepper-error-msg">{saveStructureError}</p>
-                  )}
-                </>
+                <StructureEditor
+                  value={editStructure}
+                  jsonText={structureJsonText}
+                  jsonError={structureJsonError}
+                  saving={savingStructure}
+                  saveError={saveStructureError}
+                  onModuleTitleChange={handleModuleTitleChange}
+                  onLessonTitleChange={handleLessonTitleChange}
+                  onReorderLesson={handleReorderLesson}
+                  onMoveLessonToModule={handleMoveLessonToModule}
+                  onJsonTextChange={setStructureJsonText}
+                  onApplyJson={handleApplyStructureJson}
+                  onSave={handleSaveStructure}
+                  onCancel={handleCancelEdit}
+                />
               ) : (
                 <div className="structure-tree">
                   {structure.modules
@@ -2079,10 +1762,7 @@ export default function JobPage() {
                             .slice()
                             .sort((a, b) => a.order - b.order)
                             .map((lesson) => (
-                              <li
-                                className="structure-lesson"
-                                key={lesson.id}
-                              >
+                              <li className="structure-lesson" key={lesson.id}>
                                 <span className="structure-lesson-title">
                                   {lesson.title}
                                 </span>
@@ -2092,9 +1772,7 @@ export default function JobPage() {
                                       className="structure-segment"
                                       key={`${seg.clip}-${idx}`}
                                     >
-                                      <span className="badge">
-                                        {seg.clip}
-                                      </span>{" "}
+                                      <span className="badge">{seg.clip}</span>{" "}
                                       <span className="structure-segment-range">
                                         {formatTimestamp(seg.startSeconds)}–
                                         {formatTimestamp(seg.endSeconds)}
@@ -2114,135 +1792,148 @@ export default function JobPage() {
               )}
 
               {audit && audit.clips.length > 0 && (
-                <div className="clip-cards">
-                  {audit.clips
-                    .slice()
-                    .sort((a, b) => {
-                      // Baja confianza primero.
-                      if (a.lowConfidence !== b.lowConfidence) {
-                        return a.lowConfidence ? -1 : 1;
-                      }
-                      return a.confianza - b.confianza;
-                    })
-                    .map((clipAudit) => {
-                      const clipFrames =
-                        manifest?.clips.find(
-                          (c) => c.filename === clipAudit.clip
-                        )?.frames ?? [];
-                      return (
-                        <div
-                          className={`clip-card${
-                            clipAudit.lowConfidence
-                              ? " clip-card--low-confidence"
-                              : ""
-                          }`}
-                          key={clipAudit.clip}
-                        >
-                          <div className="clip-card-header">
-                            <span className="clip-card-filename">
-                              {clipAudit.clip}
-                            </span>
-                            <span
-                              className={VERDICT_BADGE_CLASS[clipAudit.verdict]}
-                            >
-                              {VERDICT_LABELS[clipAudit.verdict]}
-                            </span>
-                            {clipAudit.lowConfidence && (
-                              <span className="badge badge-warning">
-                                ⚠ baja confianza
+                <details className="decisiones-details">
+                  <summary>
+                    Auditoría del agente por clip ({audit.clips.length})
+                  </summary>
+                  <div className="clip-cards">
+                    {audit.clips
+                      .slice()
+                      .sort((a, b) => {
+                        if (a.lowConfidence !== b.lowConfidence) {
+                          return a.lowConfidence ? -1 : 1;
+                        }
+                        return a.confianza - b.confianza;
+                      })
+                      .map((clipAudit) => {
+                        const clipFrames =
+                          manifest?.clips.find(
+                            (c) => c.filename === clipAudit.clip
+                          )?.frames ?? [];
+                        return (
+                          <div
+                            className={`clip-card${
+                              clipAudit.lowConfidence
+                                ? " clip-card--low-confidence"
+                                : ""
+                            }`}
+                            key={clipAudit.clip}
+                          >
+                            <div className="clip-card-header">
+                              <span className="clip-card-filename">
+                                {clipAudit.clip}
                               </span>
-                            )}
-                          </div>
-
-                          <div className="confidence-bar">
-                            <div
-                              className="confidence-bar-fill"
-                              style={{
-                                width: `${Math.round(clipAudit.confianza * 100)}%`,
-                              }}
-                            />
-                          </div>
-                          <p className="confidence-label">
-                            Confianza: {Math.round(clipAudit.confianza * 100)}%
-                          </p>
-
-                          {clipAudit.heuristicas.length > 0 && (
-                            <div className="heuristic-chips">
-                              {clipAudit.heuristicas.map((h) => (
-                                <span className="heuristic-chip" key={h}>
-                                  {h}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-
-                          {clipAudit.pidioFramesExtra && (
-                            <p className="frames-extra-marker">
-                              🔍 pidió más frames
-                              {clipAudit.verdictAntes &&
-                                clipAudit.verdictDespues && (
-                                  <>
-                                    {" "}
-                                    ({VERDICT_LABELS[clipAudit.verdictAntes]} →{" "}
-                                    {VERDICT_LABELS[clipAudit.verdictDespues]})
-                                  </>
-                                )}
-                              {clipAudit.queCambio && (
-                                <span className="frames-extra-detail">
-                                  {" "}
-                                  — {clipAudit.queCambio}
+                              <span
+                                className={
+                                  VERDICT_BADGE_CLASS[clipAudit.verdict]
+                                }
+                              >
+                                {VERDICT_LABELS[clipAudit.verdict]}
+                              </span>
+                              {clipAudit.lowConfidence && (
+                                <span className="badge badge-warning">
+                                  ⚠ baja confianza
                                 </span>
                               )}
-                            </p>
-                          )}
-
-                          {clipFrames.length > 0 && (
-                            <div className="frames-grid frames-grid--mini">
-                              {clipFrames.map((frame) => (
-                                <figure
-                                  className="frame-thumb"
-                                  key={frame.file}
-                                >
-                                  <img
-                                    loading="lazy"
-                                    src={`/api/jobs/${jobId}/frames/${frame.file}`}
-                                    alt={`${clipAudit.clip} — ${formatTimestamp(frame.timeSeconds)}`}
-                                  />
-                                  <figcaption className="frame-caption">
-                                    {formatTimestamp(frame.timeSeconds)}
-                                  </figcaption>
-                                </figure>
-                              ))}
                             </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                </div>
+
+                            <div className="confidence-bar">
+                              <div
+                                className="confidence-bar-fill"
+                                style={{
+                                  width: `${Math.round(clipAudit.confianza * 100)}%`,
+                                }}
+                              />
+                            </div>
+                            <p className="confidence-label">
+                              Confianza:{" "}
+                              {Math.round(clipAudit.confianza * 100)}%
+                            </p>
+
+                            {clipAudit.heuristicas.length > 0 && (
+                              <div className="heuristic-chips">
+                                {clipAudit.heuristicas.map((h) => (
+                                  <span className="heuristic-chip" key={h}>
+                                    {h}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {clipAudit.pidioFramesExtra && (
+                              <p className="frames-extra-marker">
+                                🔍 pidió más frames
+                                {clipAudit.verdictAntes &&
+                                  clipAudit.verdictDespues && (
+                                    <>
+                                      {" "}
+                                      (
+                                      {VERDICT_LABELS[clipAudit.verdictAntes]} →{" "}
+                                      {VERDICT_LABELS[clipAudit.verdictDespues]}
+                                      )
+                                    </>
+                                  )}
+                                {clipAudit.queCambio && (
+                                  <span className="frames-extra-detail">
+                                    {" "}
+                                    — {clipAudit.queCambio}
+                                  </span>
+                                )}
+                              </p>
+                            )}
+
+                            {clipFrames.length > 0 && (
+                              <div className="frames-grid frames-grid--mini">
+                                {clipFrames.map((frame) => (
+                                  <figure
+                                    className="frame-thumb"
+                                    key={frame.file}
+                                  >
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                      loading="lazy"
+                                      src={`/api/jobs/${jobId}/frames/${frame.file}`}
+                                      alt={`${clipAudit.clip} — ${formatTimestamp(frame.timeSeconds)}`}
+                                    />
+                                    <figcaption className="frame-caption">
+                                      {formatTimestamp(frame.timeSeconds)}
+                                    </figcaption>
+                                  </figure>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+                </details>
               )}
 
               {structure.apartados.length > 0 && (
-                <section className="apartados-section">
-                  <h3>Apartados</h3>
-                  <div>
+                <details className="decisiones-details">
+                  <summary>
+                    Apartados — descartes y otro curso (
+                    {structure.apartados.length})
+                  </summary>
+                  <div style={{ marginTop: "0.5rem" }}>
                     {structure.apartados.map((v) => (
                       <div className="row apartado-row" key={v.clip}>
                         <span>
                           <span className="badge">{v.clip}</span>{" "}
-                          <span
-                            className={VERDICT_BADGE_CLASS[v.verdict]}
-                          >
+                          <span className={VERDICT_BADGE_CLASS[v.verdict]}>
                             {VERDICT_LABELS[v.verdict]}
                           </span>
                           {v.curso && (
-                            <span className="badge">curso: {v.curso}</span>
+                            <span className="badge badge-neutral">
+                              curso: {v.curso}
+                            </span>
                           )}
                         </span>
                         <span className="apartado-razon">{v.razon}</span>
                       </div>
                     ))}
                   </div>
-                </section>
+                </details>
               )}
 
               {decisiones && (
@@ -2260,563 +1951,779 @@ export default function JobPage() {
                   llamadas a frames extra
                 </p>
               )}
-            </section>
+            </>
           )}
+        </StepCard>
 
-          {(silence || cuts) && (
-            <section className="prep-section">
-              <h2>Preparación del corte</h2>
-              <p className="audit-hint">
-                Resultado de las etapas deterministas 5A/5B/5C: silencio
-                medido por clip, proxies de edición y cortes propuestos a
-                partir de los huecos de la transcripción. Todavía no hay
-                reproducción de video acá, solo los números y la lista de
-                cortes para auditar.
-              </p>
+        {/* ============ PASO 4 — PREPARACIÓN ============ */}
+        <StepCard
+          index={4}
+          title="Preparación del corte"
+          state={step4}
+          elapsed={t4}
+          progress={
+            job.status === "preparing" && prepTotalFiles > 0
+              ? {
+                  done: prepDoneFiles,
+                  total: prepTotalFiles,
+                  label: `Proxies ${prepDoneFiles}/${prepTotalFiles}`,
+                }
+              : null
+          }
+          desc="Etapas deterministas: silencio medido por clip, proxies de edición, cortes propuestos y subtítulos remapeados."
+          lockedHint="Se habilita cuando apruebes la estructura del curso (paso 3)."
+        >
+          <div className="stepper-actions">
+            <button
+              className="btn"
+              type="button"
+              onClick={() => handlePrep()}
+              disabled={preparing || job.status === "preparing" || !approval}
+            >
+              {preparing || job.status === "preparing"
+                ? "Preparando…"
+                : cuts !== null
+                  ? "Re-preparar corte"
+                  : "Preparar corte"}
+            </button>
+            {approval === null && structure !== null && (
+              <button
+                className="btn btn-ghost"
+                type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "La estructura todavía no fue aprobada. ¿Preparar el corte de todos modos?"
+                    )
+                  ) {
+                    handlePrep(true);
+                  }
+                }}
+                disabled={preparing || job.status === "preparing"}
+              >
+                Preparar sin aprobar
+              </button>
+            )}
+          </div>
+          {prepError && <p className="stepper-error-msg">{prepError}</p>}
 
-              {silence && silence.clips.length > 0 && (
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Clip</th>
-                      <th>Silencios</th>
-                      <th>Seg. silentes</th>
-                      <th>Shrink</th>
+          {silence && silence.clips.length > 0 && (
+            <details className="decisiones-details" open={cuts === null}>
+              <summary>Silencio por clip ({silence.clips.length})</summary>
+              <table className="table" style={{ marginTop: "0.5rem" }}>
+                <thead>
+                  <tr>
+                    <th>Clip</th>
+                    <th>Silencios</th>
+                    <th>Seg. silentes</th>
+                    <th>Shrink</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {silence.clips.map((clip) => (
+                    <tr key={clip.filename}>
+                      <td>
+                        {clip.filename}
+                        {clip.skipped && (
+                          <span
+                            className="badge badge-neutral"
+                            title="Demo: sin recorte de silencio interno"
+                          >
+                            {" "}
+                            demo sin recorte
+                          </span>
+                        )}
+                      </td>
+                      <td>{clip.count}</td>
+                      <td>{clip.totalSilentSeconds.toFixed(1)}s</td>
+                      <td>{(clip.shrinkRatio * 100).toFixed(1)}%</td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {silence.clips.map((clip) => (
-                      <tr key={clip.filename}>
-                        <td>
-                          {clip.filename}
-                          {clip.skipped && (
-                            <span className="badge" title="Demo: sin recorte de silencio interno">
-                              {" "}
-                              🖐 demo sin recorte
-                            </span>
-                          )}
-                        </td>
-                        <td>{clip.count}</td>
-                        <td>{clip.totalSilentSeconds.toFixed(1)}s</td>
-                        <td>{(clip.shrinkRatio * 100).toFixed(1)}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-
-              {cuts && cuts.length > 0 && (
-                <div className="cuts-lessons">
-                  {cuts.map((cutsFile) => {
-                    const totalCuts = cutsFile.clips.reduce(
-                      (sum, c) => sum + c.cuts.length,
-                      0
-                    );
-                    const rawSeconds = cutsFile.clips.reduce(
-                      (sum, c) => sum + c.stats.rawSeconds,
-                      0
-                    );
-                    const projectedSeconds = cutsFile.clips.reduce(
-                      (sum, c) => sum + c.stats.projectedSeconds,
-                      0
-                    );
-                    return (
-                      <div className="row cuts-lesson-row" key={cutsFile.lessonId}>
-                        <div className="cuts-lesson-summary">
-                          <span className="structure-lesson-title">
-                            {cutsFile.lessonTitle}
-                          </span>
-                          <span className="badge">{totalCuts} cortes</span>
-                          <span className="badge">
-                            {formatTimestamp(rawSeconds)} →{" "}
-                            {formatTimestamp(projectedSeconds)}
-                          </span>
-                        </div>
-                        <details className="cuts-details">
-                          <summary>Ver cortes por clip</summary>
-                          {cutsFile.clips.map((clip, clipIdx) => (
-                            <div
-                              className="cuts-clip"
-                              key={`${clip.clip}-${clipIdx}`}
-                            >
-                              <p className="cuts-clip-title">
-                                <span className="badge">{clip.clip}</span>{" "}
-                                {clip.kind === "demo" && (
-                                  <span className="badge">🖐 demo</span>
-                                )}
-                              </p>
-                              {clip.cuts.length === 0 ? (
-                                <p className="cuts-empty">Sin cortes.</p>
-                              ) : (
-                                <ul className="cuts-list">
-                                  {clip.cuts.map((cut, cutIdx) => (
-                                    <li key={`${cut.startFrame}-${cutIdx}`}>
-                                      frames {cut.startFrame}–{cut.endFrame} (
-                                      {formatTimestamp(cut.startSeconds)}–
-                                      {formatTimestamp(cut.endSeconds)})
-                                      {cut.confirmedBySilence && (
-                                        <span className="badge">
-                                          {" "}
-                                          ✓ silencio
-                                        </span>
-                                      )}
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                            </div>
-                          ))}
-                        </details>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
+                  ))}
+                </tbody>
+              </table>
+            </details>
           )}
 
-          {(assemblyProgress || completedRenders.length > 0) && (
-            <section className="assembly-section">
-              <h2>Clases ensambladas</h2>
-              <p className="audit-hint">
-                Etapas 9 y 11: intro por clase + concatenación de los tramos
-                &quot;keep&quot; (el corte de silencios ya calculado), en
-                1080p/30. Solo se listan renders VERIFICADOS como completos
-                (frames contados con ffprobe contra los esperados): un archivo
-                a medio escribir nunca aparece acá.
-                {assemblyProgress?.backend
-                  ? ` Backend: ${assemblyProgress.backend}.`
-                  : ""}
-              </p>
-
-              {assemblyTotal > 0 && (
-                <p className="assembly-progress">
-                  {assemblyDone}/{assemblyTotal} clases
-                  {job.status === "assembling" ? " (ensamblando…)" : ""}
-                </p>
-              )}
-
-              <div className="assembly-grid">
-                {(assemblyLessons.length > 0
-                  ? assemblyLessons.map(([lessonId, lesson]) => ({
-                      lessonId,
-                      title: lesson.title,
-                      status: lesson.status,
-                      frame: lesson.frame,
-                      totalFrames: lesson.totalFrames,
-                      error: lesson.error,
-                    }))
-                  : completedRenders.map((r) => ({
-                      lessonId: r.lessonId,
-                      title: lessonTitles.get(r.lessonId) ?? r.lessonId,
-                      status: "done" as const,
-                      frame: r.actualFrames,
-                      totalFrames: r.expectedFrames,
-                      error: undefined,
-                    }))
-                ).map((lesson) => {
-                  const render = rendersByLesson.get(lesson.lessonId);
-                  const pct =
-                    lesson.totalFrames && lesson.totalFrames > 0
-                      ? Math.round(
-                          ((lesson.frame ?? 0) / lesson.totalFrames) * 100
-                        )
-                      : 0;
-
-                  return (
-                    <div className="assembly-card" key={lesson.lessonId}>
-                      <div className="assembly-card-head">
-                        <strong>{lesson.title}</strong>
-                        <span className="assembly-card-id">
-                          {lesson.lessonId}
-                        </span>
-                      </div>
-
-                      {lesson.status === "error" && (
-                        <p className="stepper-error-msg">
-                          {lesson.error ?? "Falló el ensamblaje de esta clase."}
-                        </p>
-                      )}
-
-                      {(lesson.status === "intro" ||
-                        lesson.status === "assembling" ||
-                        lesson.status === "pending") && (
-                        <p className="assembly-card-status">
-                          <span className="spinner spinner-inline" />{" "}
-                          {lesson.status === "intro"
-                            ? "renderizando intro…"
-                            : lesson.status === "assembling"
-                              ? `ensamblando… ${pct}%`
-                              : "en cola"}
-                        </p>
-                      )}
-
-                      {/* La reproducción depende del sidecar, no del status:
-                          un render de una corrida anterior sigue siendo
-                          reproducible aunque esta corrida todavía no llegue
-                          a esta clase. */}
-                      {render ? (
-                        <>
-                          <video
-                            className="assembly-video"
-                            controls
-                            preload="metadata"
-                            src={`/api/jobs/${jobId}/render/${lesson.lessonId}.mp4`}
-                          />
-                          <p className="assembly-card-meta">
-                            {formatDuration(render.durationSeconds)} ·{" "}
-                            {render.width}x{render.height} · {render.fps}fps ·{" "}
-                            {render.actualFrames} frames ·{" "}
-                            {(render.sizeBytes / (1024 * 1024)).toFixed(1)} MB
-                            {lesson.status === "skipped"
-                              ? " · reutilizado (sin cambios)"
-                              : ""}
-                          </p>
-
-                          {(() => {
-                            const verdict =
-                              gate2Verdicts?.[lesson.lessonId] ?? null;
-                            const running = gate2Loading === lesson.lessonId;
-                            const error = gate2Errors[lesson.lessonId];
-                            return (
-                              <div className="gate2-block">
-                                <div className="stepper-actions">
-                                  {verdict === null && (
-                                    <span className="badge">— sin QA</span>
-                                  )}
-                                  {verdict?.verdict === "APPROVED" && (
-                                    <span className="badge">
-                                      ✅ APROBADA
-                                    </span>
-                                  )}
-                                  {verdict?.verdict === "REJECTED" && (
-                                    <span className="badge badge-error">
-                                      ❌ RECHAZADA (
-                                      {verdict.problemas.length} problema
-                                      {verdict.problemas.length === 1
-                                        ? ""
-                                        : "s"}
-                                      )
-                                    </span>
-                                  )}
-                                  <button
-                                    className="btn btn-secondary"
-                                    type="button"
-                                    onClick={() =>
-                                      handleGate2(lesson.lessonId)
-                                    }
-                                    disabled={running}
-                                  >
-                                    {running ? "Corriendo QA…" : "QA visual"}
-                                  </button>
-                                </div>
-                                {error && (
-                                  <p className="stepper-error-msg">{error}</p>
-                                )}
-                                {verdict?.verdict === "REJECTED" &&
-                                  verdict.problemas.length > 0 && (
-                                    <details className="cuts-details">
-                                      <summary>
-                                        Ver problemas detectados
-                                      </summary>
-                                      <ul className="cuts-list">
-                                        {verdict.problemas.map(
-                                          (p, idx) => (
-                                            <li key={`${p.frame}-${idx}`}>
-                                              frame {p.frame} — {p.tipo} (
-                                              {p.severidad}): {p.detalle}
-                                            </li>
-                                          )
-                                        )}
-                                      </ul>
-                                    </details>
-                                  )}
-                              </div>
-                            );
-                          })()}
-                        </>
-                      ) : null}
+          {cuts && cuts.length > 0 && (
+            <div className="cuts-lessons">
+              {cuts.map((cutsFile) => {
+                const totalCuts = cutsFile.clips.reduce(
+                  (sum, c) => sum + c.cuts.length,
+                  0
+                );
+                const rawSeconds = cutsFile.clips.reduce(
+                  (sum, c) => sum + c.stats.rawSeconds,
+                  0
+                );
+                const projectedSeconds = cutsFile.clips.reduce(
+                  (sum, c) => sum + c.stats.projectedSeconds,
+                  0
+                );
+                return (
+                  <div className="row cuts-lesson-row" key={cutsFile.lessonId}>
+                    <div className="cuts-lesson-summary">
+                      <span className="structure-lesson-title">
+                        {cutsFile.lessonTitle}
+                      </span>
+                      <span className="badge badge-neutral">
+                        {totalCuts} cortes
+                      </span>
+                      <span className="badge badge-neutral">
+                        {formatTimestamp(rawSeconds)} →{" "}
+                        {formatTimestamp(projectedSeconds)}
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
-
-              {canAssemble && (
-                <div className="stepper-actions">
-                  <button
-                    className="btn btn-secondary"
-                    type="button"
-                    onClick={() => handleAssemble(false)}
-                    disabled={assembling || job.status === "assembling"}
-                  >
-                    {assembling || job.status === "assembling"
-                      ? "Ensamblando…"
-                      : "Ensamblar clases (intros + corte)"}
-                  </button>
-                  <button
-                    className="btn btn-secondary"
-                    type="button"
-                    onClick={() => handleAssemble(true)}
-                    disabled={assembling || job.status === "assembling"}
-                    title="Ignora los renders existentes y vuelve a renderizar todas las clases"
-                  >
-                    Re-ensamblar todo
-                  </button>
-                </div>
-              )}
-              {assembleError && (
-                <p className="stepper-error-msg">{assembleError}</p>
-              )}
-            </section>
-          )}
-
-          {structure && (
-            <section className="gate3-section">
-              <h2>Revisión de módulo (Gate 3)</h2>
-              <p className="audit-hint">
-                Auditoría de coherencia sobre el módulo completo, una vez que
-                sus clases ya están ensambladas.
-              </p>
-              <div className="gate3-grid">
-                {structure.modules.map((module) => {
-                  const verdict = gate3Verdicts?.[module.id] ?? null;
-                  const running = gate3Loading === module.id;
-                  const error = gate3Errors[module.id];
-                  return (
-                    <div className="assembly-card" key={module.id}>
-                      <div className="assembly-card-head">
-                        <strong>{module.title}</strong>
-                        <span className="assembly-card-id">{module.id}</span>
-                      </div>
-                      <div className="stepper-actions">
-                        {verdict === null && (
-                          <span className="badge">— sin revisión</span>
-                        )}
-                        {verdict?.verdict === "APPROVED" && (
-                          <span className="badge">✅ APROBADO</span>
-                        )}
-                        {verdict?.verdict === "REJECTED" && (
-                          <span className="badge badge-error">
-                            ❌ RECHAZADO ({verdict.hallazgos.length} hallazgo
-                            {verdict.hallazgos.length === 1 ? "" : "s"})
-                          </span>
-                        )}
-                        <button
-                          className="btn btn-secondary"
-                          type="button"
-                          onClick={() => handleGate3(module.id)}
-                          disabled={running}
-                        >
-                          {running ? "Corriendo revisión…" : "Revisión de módulo"}
-                        </button>
-                      </div>
-                      {error && <p className="stepper-error-msg">{error}</p>}
-                      {verdict?.verdict === "REJECTED" &&
-                        verdict.hallazgos.length > 0 && (
-                          <details className="cuts-details">
-                            <summary>Ver hallazgos detectados</summary>
+                    <details className="cuts-details">
+                      <summary>Ver cortes por clip</summary>
+                      {cutsFile.clips.map((clip, clipIdx) => (
+                        <div className="cuts-clip" key={`${clip.clip}-${clipIdx}`}>
+                          <p className="cuts-clip-title">
+                            <span className="badge">{clip.clip}</span>{" "}
+                            {clip.kind === "demo" && (
+                              <span className="badge badge-neutral">demo</span>
+                            )}
+                          </p>
+                          {clip.cuts.length === 0 ? (
+                            <p className="cuts-empty">Sin cortes.</p>
+                          ) : (
                             <ul className="cuts-list">
-                              {verdict.hallazgos.map((h, idx) => (
-                                <li key={`${h.tipo}-${idx}`}>
-                                  {h.lessonId ? `${h.lessonId} — ` : ""}
-                                  {h.tipo} ({h.severidad}): {h.detalle}
+                              {clip.cuts.map((cut, cutIdx) => (
+                                <li key={`${cut.startFrame}-${cutIdx}`}>
+                                  frames {cut.startFrame}–{cut.endFrame} (
+                                  {formatTimestamp(cut.startSeconds)}–
+                                  {formatTimestamp(cut.endSeconds)})
+                                  {cut.confirmedBySilence && (
+                                    <span className="badge"> ✓ silencio</span>
+                                  )}
                                 </li>
                               ))}
                             </ul>
-                          </details>
-                        )}
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
+                          )}
+                        </div>
+                      ))}
+                    </details>
+                  </div>
+                );
+              })}
+            </div>
           )}
 
-          <section className="delivery-section">
-            <h2>Entrega</h2>
-            <p className="audit-hint">
-              Empaqueta el curso completo (renders + notas) en un único
-              directorio de entrega.
-            </p>
-            <div className="stepper-actions">
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={handlePackage}
-                disabled={!canPackage || packaging}
-                title={
-                  canPackage
-                    ? undefined
-                    : "Todavía no hay clases renderizadas para empaquetar"
+          {cuts !== null && (
+            <>
+              <div className="stepper-actions">
+                <button
+                  className="btn btn-secondary"
+                  type="button"
+                  onClick={handleAuditCaptions}
+                  disabled={auditingCaptions}
+                >
+                  {auditingCaptions
+                    ? "Disparando auditoría…"
+                    : "Auditar subtítulos (IA)"}
+                </button>
+              </div>
+              {auditCaptionsNotice && (
+                <p className="notice-ok">
+                  Auditoría de subtítulos disparada — corre en segundo plano y
+                  corrige la jerga técnica directamente en plan/captions/.
+                </p>
+              )}
+              {auditCaptionsError && (
+                <p className="stepper-error-msg">{auditCaptionsError}</p>
+              )}
+            </>
+          )}
+        </StepCard>
+
+        {/* ============ PASO 5 — OVERLAYS ============ */}
+        <StepCard
+          index={5}
+          title="Overlays didácticos"
+          state={step5}
+          desc="Datos y hechos que se sobreimprimen durante la clase: briefs → imágenes → QA visual (Gate 1) → timeline."
+          lockedHint="Se habilita cuando la preparación del corte (paso 4) termine."
+        >
+          <div className="substage">
+            <span className="substage-icon">
+              {generatingBriefs ? (
+                <span className="spinner" />
+              ) : briefsEntries.length > 0 ? (
+                "✓"
+              ) : (
+                "•"
+              )}
+            </span>
+            <span className="substage-name">1 · Briefs</span>
+            <span className="substage-meta">
+              {briefsEntries.length > 0
+                ? `${briefsEntries.reduce(
+                    (n, [, f]) => n + (f?.briefs.length ?? 0),
+                    0
+                  )} briefs en ${briefsEntries.length} clases`
+                : "—"}
+            </span>
+          </div>
+          <div className="substage">
+            <span className="substage-icon">
+              {generatingOverlayImages ? <span className="spinner" /> : "•"}
+            </span>
+            <span className="substage-name">2 · Imágenes</span>
+            <span className="substage-meta">requiere Chrome CDP en el Mac</span>
+          </div>
+          <div className="substage">
+            <span className="substage-icon">
+              {gate1Loading || gatePollTimersRef.current["gate1"] ? (
+                <span className="spinner" />
+              ) : gate1 ? (
+                gate1Rejected.length > 0 ? (
+                  "✗"
+                ) : (
+                  "✓"
+                )
+              ) : (
+                "•"
+              )}
+            </span>
+            <span className="substage-name">3 · Gate 1 (QA)</span>
+            <span className="substage-meta">
+              {gate1
+                ? `${gate1.images.length - gate1Rejected.length}/${gate1.images.length} aprobadas`
+                : "—"}
+            </span>
+          </div>
+          <div className="substage">
+            <span className="substage-icon">
+              {recalculatingTimeline ? (
+                <span className="spinner" />
+              ) : timelineEntries.length > 0 ? (
+                "✓"
+              ) : (
+                "•"
+              )}
+            </span>
+            <span className="substage-name">4 · Timeline</span>
+            <span className="substage-meta">
+              {timelineEntries.length > 0
+                ? `${timelineEntries.length} clases remapeadas`
+                : "—"}
+            </span>
+          </div>
+
+          <div className="stepper-actions">
+            <button
+              className="btn"
+              type="button"
+              onClick={handleOverlayBriefs}
+              disabled={generatingBriefs || cuts === null}
+            >
+              {generatingBriefs
+                ? "Generando briefs…"
+                : briefsEntries.length > 0
+                  ? "Re-generar briefs"
+                  : "Generar briefs"}
+            </button>
+            <button
+              className="btn btn-secondary"
+              type="button"
+              onClick={handleOverlayGen}
+              disabled={generatingOverlayImages || briefsEntries.length === 0}
+              title="Requiere Chrome con depuración remota (puerto 9222) ya logueado en este Mac"
+            >
+              {generatingOverlayImages
+                ? "Generando imágenes…"
+                : "Generar imágenes"}
+            </button>
+            <button
+              className="btn btn-secondary"
+              type="button"
+              onClick={handleGate1}
+              disabled={gate1Loading || briefsEntries.length === 0}
+            >
+              {gate1Loading ? "Corriendo Gate 1…" : "Correr Gate 1"}
+            </button>
+            <button
+              className="btn btn-secondary"
+              type="button"
+              onClick={handleOverlaysTimeline}
+              disabled={recalculatingTimeline}
+            >
+              {recalculatingTimeline ? "Recalculando…" : "Recalcular timeline"}
+            </button>
+          </div>
+          {overlayBriefsError && (
+            <p className="stepper-error-msg">{overlayBriefsError}</p>
+          )}
+          {overlayGenError && (
+            <p className="stepper-error-msg">{overlayGenError}</p>
+          )}
+          {gate1Error && <p className="stepper-error-msg">{gate1Error}</p>}
+          {overlaysTimelineError && (
+            <p className="stepper-error-msg">{overlaysTimelineError}</p>
+          )}
+
+          {briefsEntries.map(([lessonId, file]) => (
+            <details className="cuts-details" key={lessonId}>
+              <summary>
+                {lessonTitles.get(lessonId) ?? lessonId} (
+                {file?.briefs.length ?? 0} brief
+                {file?.briefs.length === 1 ? "" : "s"})
+              </summary>
+              <ul className="cuts-list">
+                {file?.briefs.map((b) => (
+                  <li key={b.key}>
+                    {b.key} — {b.fact} (t={b.at_seconds}s)
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ))}
+
+          {gate1 && (
+            <details className="decisiones-details" open={gate1Rejected.length > 0}>
+              <summary>
+                Veredicto Gate 1 —{" "}
+                {gate1Rejected.length > 0
+                  ? `${gate1Rejected.length} rechazadas`
+                  : "todo aprobado"}
+              </summary>
+              <p className="assembly-card-meta">
+                Auditado: {new Date(gate1.auditedAt).toLocaleString()}
+              </p>
+              <ul className="cuts-list">
+                {gate1.images.map((img) => (
+                  <li key={img.key}>
+                    {img.verdict === "APPROVED" ? "✅" : "❌"} {img.key}
+                    {img.causa ? ` — ${img.causa}` : ""}
+                    {img.escalar ? " 🔺 escalar" : ""}
+                    {img.escalar && img.escalar_motivo
+                      ? ` (${img.escalar_motivo})`
+                      : ""}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          {timelineEntries.map(([lessonId, file]) => (
+            <details className="cuts-details" key={`timeline-${lessonId}`}>
+              <summary>
+                Timeline · {lessonTitles.get(lessonId) ?? lessonId} (
+                {file?.overlays.length ?? 0} overlay
+                {file?.overlays.length === 1 ? "" : "s"})
+              </summary>
+              <ul className="cuts-list">
+                {file?.overlays.map((o) => (
+                  <li key={o.key}>
+                    {o.key} — frames [{o.startFrame}, {o.endFrame}) — {o.file}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ))}
+        </StepCard>
+
+        {/* ============ PASO 6 — ENSAMBLAJE ============ */}
+        <StepCard
+          index={6}
+          title="Ensamblaje de clases"
+          state={step6}
+          elapsed={t6}
+          progress={
+            job.status === "assembling" && assemblyTotal > 0
+              ? {
+                  done: assemblyDone,
+                  total: assemblyTotal,
+                  label: `${assemblyDone}/${assemblyTotal} clases ensambladas`,
                 }
+              : null
+          }
+          desc={`Intro animada + tramos sin silencio + subtítulos + overlays, en 1080p/30. Solo se listan renders verificados frame a frame.${
+            assemblyProgress?.backend
+              ? ` Backend: ${assemblyProgress.backend}.`
+              : ""
+          }`}
+          lockedHint="Se habilita cuando la preparación del corte (paso 4) termine."
+        >
+          <div className="stepper-actions">
+            <button
+              className="btn"
+              type="button"
+              onClick={() => handleAssemble(false)}
+              disabled={assembling || job.status === "assembling" || cuts === null}
+            >
+              {assembling || job.status === "assembling"
+                ? "Ensamblando…"
+                : completedRenders.length > 0
+                  ? "Ensamblar (solo lo que cambió)"
+                  : "Ensamblar clases"}
+            </button>
+            {completedRenders.length > 0 && (
+              <button
+                className="btn btn-ghost"
+                type="button"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Re-ensamblar TODO ignora los renders existentes y vuelve a renderizar todas las clases. ¿Continuar?"
+                    )
+                  ) {
+                    handleAssemble(true);
+                  }
+                }}
+                disabled={assembling || job.status === "assembling"}
               >
-                {packaging ? "Empaquetando…" : "Empaquetar curso"}
+                Re-ensamblar todo
               </button>
-            </div>
-            {packageError && (
-              <p className="stepper-error-msg">{packageError}</p>
             )}
-            {packageManifest && (
-              <div className="package-result">
-                <div className="stepper-actions">
-                  <Link
-                    className="btn"
-                    href={`/jobs/${encodeURIComponent(jobId)}/course`}
+          </div>
+          {assembleError && <p className="stepper-error-msg">{assembleError}</p>}
+
+          {(assemblyLessons.length > 0 || completedRenders.length > 0) && (
+            <div className="assembly-grid">
+              {(assemblyLessons.length > 0
+                ? assemblyLessons.map(([lessonId, lesson]) => ({
+                    lessonId,
+                    title: lesson.title,
+                    status: lesson.status,
+                    frame: lesson.frame,
+                    totalFrames: lesson.totalFrames,
+                    error: lesson.error,
+                  }))
+                : completedRenders.map((r) => ({
+                    lessonId: r.lessonId,
+                    title: lessonTitles.get(r.lessonId) ?? r.lessonId,
+                    status: "done" as const,
+                    frame: r.actualFrames,
+                    totalFrames: r.expectedFrames,
+                    error: undefined as string | undefined,
+                  }))
+              ).map((lesson) => {
+                const render = rendersByLesson.get(lesson.lessonId);
+                const pct =
+                  lesson.totalFrames && lesson.totalFrames > 0
+                    ? Math.round(
+                        ((lesson.frame ?? 0) / lesson.totalFrames) * 100
+                      )
+                    : 0;
+
+                return (
+                  <div className="assembly-card" key={lesson.lessonId}>
+                    <div className="assembly-card-head">
+                      <strong>{lesson.title}</strong>
+                      <span className="assembly-card-id">{lesson.lessonId}</span>
+                    </div>
+
+                    {lesson.status === "error" && (
+                      <p className="stepper-error-msg">
+                        {lesson.error ?? "Falló el ensamblaje de esta clase."}
+                      </p>
+                    )}
+
+                    {(lesson.status === "intro" ||
+                      lesson.status === "assembling" ||
+                      lesson.status === "pending") && (
+                      <div>
+                        <ProgressBar
+                          done={lesson.frame ?? 0}
+                          total={lesson.totalFrames ?? 0}
+                          indeterminate={
+                            lesson.status !== "assembling" ||
+                            !lesson.totalFrames
+                          }
+                          label={
+                            lesson.status === "intro"
+                              ? "Renderizando intro…"
+                              : lesson.status === "assembling"
+                                ? `Ensamblando… ${pct}%`
+                                : "En cola"
+                          }
+                        />
+                      </div>
+                    )}
+
+                    {render ? (
+                      <>
+                        <video
+                          className="assembly-video"
+                          controls
+                          preload="metadata"
+                          src={`/api/jobs/${jobId}/render/${lesson.lessonId}.mp4`}
+                        />
+                        <p className="assembly-card-meta">
+                          {formatDuration(render.durationSeconds)} ·{" "}
+                          {render.width}x{render.height} · {render.fps}fps ·{" "}
+                          {render.actualFrames} frames ·{" "}
+                          {(render.sizeBytes / (1024 * 1024)).toFixed(1)} MB
+                          {lesson.status === "skipped"
+                            ? " · reutilizado (sin cambios)"
+                            : ""}
+                        </p>
+                      </>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </StepCard>
+
+        {/* ============ PASO 7 — QA (GATES 2 Y 3) ============ */}
+        <StepCard
+          index={7}
+          title="Control de calidad"
+          state={step7}
+          desc="Gate 2: un juez con visión revisa frames del render final de cada clase. Gate 3: coherencia del módulo completo."
+          lockedHint="Se habilita cuando haya clases ensambladas (paso 6)."
+        >
+          <div className="stepper-actions">
+            <button
+              className="btn"
+              type="button"
+              onClick={handleGate2All}
+              disabled={gate2AllRunning || completedRenders.length === 0}
+            >
+              {gate2AllRunning
+                ? "QA de todas en curso…"
+                : "QA de todas las clases (Gate 2)"}
+            </button>
+            {gate2AllRunning && (
+              <span className="badge badge-neutral">
+                {gate2Done.length}/{completedRenders.length} con veredicto
+              </span>
+            )}
+          </div>
+          {gate2AllError && <p className="stepper-error-msg">{gate2AllError}</p>}
+
+          {completedRenders.map((render) => {
+            const verdict = gate2Verdicts?.[render.lessonId] ?? null;
+            const running =
+              gate2Loading === render.lessonId ||
+              Boolean(gatePollTimersRef.current[`gate2:${render.lessonId}`]);
+            const error = gate2Errors[render.lessonId];
+            return (
+              <div className="row qa-lesson-row" key={render.lessonId}>
+                <span className="qa-lesson-name">
+                  {lessonTitles.get(render.lessonId) ?? render.lessonId}
+                </span>
+                <span className="qa-lesson-controls">
+                  {verdict === null && !running && (
+                    <span className="badge badge-neutral">sin QA</span>
+                  )}
+                  {running && (
+                    <span className="badge badge-neutral">
+                      <span className="spinner spinner-inline" />
+                      juzgando…
+                    </span>
+                  )}
+                  {verdict?.verdict === "APPROVED" && (
+                    <span className="badge">✅ Aprobada</span>
+                  )}
+                  {verdict?.verdict === "REJECTED" && (
+                    <span className="badge badge-error">
+                      ❌ Rechazada ({verdict.problemas.length})
+                    </span>
+                  )}
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    onClick={() => handleGate2(render.lessonId)}
+                    disabled={running || gate2AllRunning}
                   >
-                    Ver curso completo
-                  </Link>
-                </div>
-                <p className="assembly-card-meta">
-                  {packageManifest.courseDir}
-                </p>
-                <ul className="cuts-list">
-                  {packageManifest.lessons.map((l) => (
-                    <li key={l.lessonId}>
-                      {l.moduleId} / {l.lessonId} — {l.fileName}{" "}
-                      <a
+                    {verdict ? "Re-correr QA" : "QA visual"}
+                  </button>
+                </span>
+                {error && (
+                  <p className="stepper-error-msg" style={{ flexBasis: "100%" }}>
+                    {error}
+                  </p>
+                )}
+                {verdict?.verdict === "REJECTED" &&
+                  verdict.problemas.length > 0 && (
+                    <details
+                      className="cuts-details"
+                      style={{ flexBasis: "100%" }}
+                    >
+                      <summary>Ver problemas detectados</summary>
+                      <ul className="cuts-list">
+                        {verdict.problemas.map((p, idx) => (
+                          <li key={`${p.frame}-${idx}`}>
+                            frame {p.frame} — {p.tipo} ({p.severidad}):{" "}
+                            {p.detalle}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+              </div>
+            );
+          })}
+
+          {modules.length > 0 && (
+            <>
+              <h3 style={{ marginTop: "1.25rem" }}>
+                Revisión de módulo (Gate 3)
+              </h3>
+              {modules.map((module) => {
+                const verdict = gate3Verdicts?.[module.id] ?? null;
+                const running =
+                  gate3Loading === module.id ||
+                  Boolean(gatePollTimersRef.current[`gate3:${module.id}`]);
+                const error = gate3Errors[module.id];
+                return (
+                  <div className="row qa-lesson-row" key={module.id}>
+                    <span className="qa-lesson-name">{module.title}</span>
+                    <span className="qa-lesson-controls">
+                      {verdict === null && !running && (
+                        <span className="badge badge-neutral">sin revisión</span>
+                      )}
+                      {running && (
+                        <span className="badge badge-neutral">
+                          <span className="spinner spinner-inline" />
+                          revisando…
+                        </span>
+                      )}
+                      {verdict?.verdict === "APPROVED" && (
+                        <span className="badge">✅ Aprobado</span>
+                      )}
+                      {verdict?.verdict === "REJECTED" && (
+                        <span className="badge badge-error">
+                          ❌ Rechazado ({verdict.hallazgos.length})
+                        </span>
+                      )}
+                      <button
                         className="btn btn-secondary"
-                        href={`/api/jobs/${encodeURIComponent(jobId)}/render/${encodeURIComponent(l.lessonId)}.mp4`}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                        type="button"
+                        onClick={() => handleGate3(module.id)}
+                        disabled={running}
                       >
-                        Ver MP4
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </section>
+                        {verdict ? "Re-revisar" : "Revisar módulo"}
+                      </button>
+                    </span>
+                    {error && (
+                      <p
+                        className="stepper-error-msg"
+                        style={{ flexBasis: "100%" }}
+                      >
+                        {error}
+                      </p>
+                    )}
+                    {verdict?.verdict === "REJECTED" &&
+                      verdict.hallazgos.length > 0 && (
+                        <details
+                          className="cuts-details"
+                          style={{ flexBasis: "100%" }}
+                        >
+                          <summary>Ver hallazgos detectados</summary>
+                          <ul className="cuts-list">
+                            {verdict.hallazgos.map((h, idx) => (
+                              <li key={`${h.tipo}-${idx}`}>
+                                {h.lessonId ? `${h.lessonId} — ` : ""}
+                                {h.tipo} ({h.severidad}): {h.detalle}
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      )}
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </StepCard>
 
-          <section className="overlays-section">
-            <h2>Briefs de overlays</h2>
-            <p className="audit-hint">
-              Genera los briefs de overlays visuales (datos/hechos a resaltar
-              durante la clase) para todas las lecciones de la estructura.
-            </p>
-            <div className="stepper-actions">
-              <button
+        {/* ============ PASO 8 — ENTREGA ============ */}
+        <StepCard
+          index={8}
+          title="Entrega"
+          state={step8}
+          desc="Empaqueta el curso completo (renders + notas por clase) en un directorio de entrega auditable."
+          lockedHint="Se habilita cuando haya clases ensambladas (paso 6)."
+        >
+          <div className="stepper-actions">
+            <button
+              className="btn"
+              type="button"
+              onClick={handlePackage}
+              disabled={!canPackage || packaging}
+            >
+              {packaging
+                ? "Empaquetando…"
+                : packageManifest
+                  ? "Re-empaquetar curso"
+                  : "Empaquetar curso"}
+            </button>
+            {packageManifest && (
+              <Link
                 className="btn btn-secondary"
-                type="button"
-                onClick={handleOverlayBriefs}
-                disabled={generatingBriefs}
+                href={`/jobs/${encodeURIComponent(jobId)}/course`}
               >
-                {generatingBriefs
-                  ? "Generando briefs…"
-                  : "Generar briefs de overlays"}
-              </button>
-            </div>
-            {overlayBriefsError && (
-              <p className="stepper-error-msg">{overlayBriefsError}</p>
+                Ver curso completo →
+              </Link>
             )}
-            {overlayBriefs &&
-              Object.entries(overlayBriefs)
-                .filter(([, file]) => file !== null)
-                .map(([lessonId, file]) => (
-                  <details className="cuts-details" key={lessonId}>
-                    <summary>
-                      {lessonTitles.get(lessonId) ?? lessonId} (
-                      {file?.briefs.length ?? 0} brief
-                      {file?.briefs.length === 1 ? "" : "s"})
-                    </summary>
-                    <ul className="cuts-list">
-                      {file?.briefs.map((b) => (
-                        <li key={b.key}>
-                          {b.key} — {b.fact} (t={b.at_seconds}s)
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
+          </div>
+          {packageError && <p className="stepper-error-msg">{packageError}</p>}
+
+          {packageManifest && (
+            <div>
+              <p className="assembly-card-meta">
+                {packageManifest.courseDir} · empaquetado{" "}
+                {new Date(packageManifest.packagedAt).toLocaleString()}
+              </p>
+              <ul className="cuts-list">
+                {packageManifest.lessons.map((l) => (
+                  <li key={l.lessonId}>
+                    {l.moduleId} / {l.lessonId} — {l.fileName}{" "}
+                    <a
+                      href={`/api/jobs/${encodeURIComponent(jobId)}/render/${encodeURIComponent(l.lessonId)}.mp4`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Ver MP4
+                    </a>
+                  </li>
                 ))}
-
-            <p className="audit-hint">
-              La generación de imágenes requiere Chrome corriendo en este Mac
-              con depuración remota (CDP, puerto 9222) YA LOGUEADO — no
-              funciona en otro entorno ni sin sesión iniciada.
-            </p>
-            <div className="stepper-actions">
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={handleOverlayGen}
-                disabled={generatingOverlayImages}
-              >
-                {generatingOverlayImages
-                  ? "Generando imágenes…"
-                  : "Generar imágenes (Mac + Chrome CDP)"}
-              </button>
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={handleGate1}
-                disabled={gate1Loading}
-              >
-                {gate1Loading ? "Corriendo Gate 1…" : "Gate 1"}
-              </button>
-              <button
-                className="btn btn-secondary"
-                type="button"
-                onClick={handleOverlaysTimeline}
-                disabled={recalculatingTimeline}
-              >
-                {recalculatingTimeline
-                  ? "Recalculando…"
-                  : "Recalcular timeline"}
-              </button>
+              </ul>
             </div>
-            {overlayGenError && (
-              <p className="stepper-error-msg">{overlayGenError}</p>
-            )}
-            {gate1Error && (
-              <p className="stepper-error-msg">{gate1Error}</p>
-            )}
-            {overlaysTimelineError && (
-              <p className="stepper-error-msg">{overlaysTimelineError}</p>
-            )}
+          )}
+        </StepCard>
+      </ol>
 
-            {gate1 && (
-              <div className="gate1-result">
-                <p className="assembly-card-meta">
-                  Gate 1 auditado: {gate1.auditedAt}
-                </p>
-                <ul className="cuts-list">
-                  {gate1.images.map((img) => (
-                    <li key={img.key}>
-                      {img.verdict === "APPROVED" ? "✅" : "❌"} {img.key}
-                      {img.causa ? ` — ${img.causa}` : ""}
-                      {img.escalar ? " 🔺 escalar" : ""}
-                      {img.escalar && img.escalar_motivo
-                        ? ` (${img.escalar_motivo})`
-                        : ""}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {overlaysTimeline &&
-              Object.entries(overlaysTimeline)
-                .filter(([, file]) => file !== null)
-                .map(([lessonId, file]) => (
-                  <details className="cuts-details" key={`timeline-${lessonId}`}>
-                    <summary>
-                      {lessonTitles.get(lessonId) ?? lessonId} (
-                      {file?.overlays.length ?? 0} overlay
-                      {file?.overlays.length === 1 ? "" : "s"} en timeline)
-                    </summary>
-                    <ul className="cuts-list">
-                      {file?.overlays.map((o) => (
-                        <li key={o.key}>
-                          {o.key} — frames [{o.startFrame}, {o.endFrame}) —{" "}
-                          {o.file}
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                ))}
-          </section>
-        </section>
-      )}
+      {/* ============ MODO EXPERTO ============ */}
+      <details className="expert-zone">
+        <summary>Modo experto</summary>
+        <p>
+          Corre TODO el pipeline desatendido (preparación → overlays → gates →
+          ensamblaje → QA → entrega) sin detenerse en cada paso. Solo para
+          cuando confías en la estructura aprobada y no necesitas validar
+          etapa por etapa.
+        </p>
+        <div className="stepper-actions">
+          <button
+            className="btn btn-danger-outline"
+            type="button"
+            onClick={() => {
+              if (
+                window.confirm(
+                  "¿Correr todo el pipeline sin intervención? Esto encadena todas las etapas restantes y puede tardar horas."
+                )
+              ) {
+                handleRunAll();
+              }
+            }}
+            disabled={runningAll || approval === null}
+            title={
+              approval === null
+                ? "Requiere la estructura aprobada (paso 3)"
+                : undefined
+            }
+          >
+            {runningAll
+              ? "Iniciando corrida completa…"
+              : "Correr todo sin intervención (run-all)"}
+          </button>
+        </div>
+        {runAllError && <p className="stepper-error-msg">{runAllError}</p>}
+      </details>
     </main>
   );
 }

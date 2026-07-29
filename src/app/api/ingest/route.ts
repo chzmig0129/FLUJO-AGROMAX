@@ -108,9 +108,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     };
     await writeJobJson(job);
 
-    // Arrancamos el pipeline (probe + transcripción) en background: no se
-    // hace await para no bloquear la respuesta del ingest. Cualquier error
-    // se loguea (el pipeline mismo ya persiste el estado 'error' en el job).
+    // Arrancamos el pipeline (probe + transcripción + muestreo de frames) en
+    // background: no se hace await para no bloquear la respuesta del
+    // ingest. El job queda en 'sampled' y se detiene ahí (modo manual por
+    // defecto): el plan NO se dispara automáticamente, solo vía POST
+    // /api/jobs/[jobId]/plan. Cualquier error se loguea (el pipeline mismo
+    // ya persiste el estado 'error' en el job).
     runPipeline(id).catch(console.error);
 
     return NextResponse.json({ jobId: id, files });

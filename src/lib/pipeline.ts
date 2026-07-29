@@ -79,7 +79,17 @@ export function runPipeline(jobId: string): Promise<void> {
   return promise;
 }
 
-/** Ejecuta las etapas de probe y transcribe en secuencia, con manejo de error. */
+/**
+ * Ejecuta las etapas de probe, transcribe y muestreo de frames en secuencia,
+ * con manejo de error, y deja el job en 'sampled'.
+ *
+ * Modo manual por defecto (contrato v2, FLUJO-V2.md fase 2): a partir de acá
+ * NO se encadena automáticamente la etapa de plan. El plan corre únicamente
+ * cuando el usuario lo dispara explícitamente vía POST
+ * /api/jobs/[jobId]/plan (runPlanOnly). El único encadenado completo
+ * desatendido sigue siendo runFullPipeline (disparado por POST
+ * /api/jobs/[jobId]/run-all), que no se toca acá.
+ */
 async function executePipeline(jobId: string): Promise<void> {
   try {
     // Etapa 2: probe.
@@ -100,7 +110,8 @@ async function executePipeline(jobId: string): Promise<void> {
       stages: { transcribe: { finishedAt: new Date().toISOString() } },
     });
 
-    // Etapa 3.5: muestreo de frames de referencia.
+    // Etapa 3.5: muestreo de frames de referencia. El job queda en
+    // 'sampled' y se detiene ahí: no se invoca runPlanStage automáticamente.
     await updateJobStatus(jobId, "sampling", {
       stages: { frames: { startedAt: new Date().toISOString() } },
     });
@@ -108,18 +119,6 @@ async function executePipeline(jobId: string): Promise<void> {
     await updateJobStatus(jobId, "sampled", {
       stages: { frames: { finishedAt: new Date().toISOString() } },
     });
-
-    // Etapa 4: filtro editorial y estructura autónoma (agente Claude).
-    await updateJobStatus(jobId, "planning", {
-      stages: { plan: { startedAt: new Date().toISOString() } },
-    });
-    await runPlanStage(jobId);
-    await updateJobStatus(jobId, "planned", {
-      stages: { plan: { finishedAt: new Date().toISOString() } },
-    });
-
-    // Etapas 5A/5B/5C: preparación determinista (silencio, proxies, cortes).
-    await runPrepStages(jobId);
   } catch (err) {
     const errorMessage =
       err instanceof Error ? err.message : "Error desconocido en el pipeline";

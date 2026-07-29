@@ -23,3 +23,7 @@ tsconfig.tsbuildinfo
 
 # Bytecode python de checks
 __pycache__/
+
+# Config local de entorno
+.env.local
+.env*.local

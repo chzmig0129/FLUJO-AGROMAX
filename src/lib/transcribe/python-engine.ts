@@ -139,6 +139,14 @@ export function makePythonEngine(
   // en paralelo para varios clips, aquí se ponen en fila; el proceso nunca
   // ve dos requests solapados.
   let chain: Promise<unknown> = Promise.resolve();
+  // Cuenta requests que ya fueron aceptados por `transcribe()` (encolados en
+  // `chain` o ya en curso) y todavía no terminaron (éxito o error). Es la
+  // única fuente de verdad sobre "cola vacía y sin request en vuelo": se
+  // incrementa de forma síncrona al aceptar un request (antes de esperar
+  // turno en `chain`) y se decrementa cuando ese request finalmente se
+  // resuelve, sin importar si el proceso tuvo que relanzarse a mitad. El
+  // idle timer solo puede armarse cuando este contador vuelve a 0.
+  let pendingCount = 0;
 
   function clearIdleTimer(): void {
     if (idleTimer) {
@@ -147,7 +155,11 @@ export function makePythonEngine(
     }
   }
 
-  function scheduleIdleShutdown(): void {
+  /** Arma el apagado por inactividad SOLO si de verdad no queda nada
+   * pendiente (ni en cola ni en vuelo). Si mientras tanto ya llegó otro
+   * request, no hace nada: ese request ya se encargó de desarmar el timer. */
+  function scheduleIdleShutdownIfIdle(): void {
+    if (pendingCount > 0) return;
     clearIdleTimer();
     idleTimer = setTimeout(() => {
       killChild();
@@ -208,7 +220,6 @@ export function makePythonEngine(
   /** Asegura que haya un proceso --serve vivo (lazy spawn) y devuelve tanto
    * el proceso como su lector de líneas. */
   function ensureChild(): { proc: Child; reader: LineReader } {
-    clearIdleTimer();
     if (!child || !lineReader) {
       const proc = spawnChild();
       return { proc, reader: lineReader as LineReader };
@@ -261,11 +272,12 @@ export function makePythonEngine(
 
     if ("error" in parsed) {
       // Error por-clip: el proceso sigue vivo y listo para el siguiente
-      // request, no es un fallo de la corrida completa.
+      // request, no es un fallo de la corrida completa. El armado (o no) del
+      // idle timer lo decide el llamador (`transcribe()`) en función de
+      // `pendingCount`, no este helper.
       throw new Error(`Falló la transcripción de ${baseName}: ${parsed.error}`);
     }
 
-    scheduleIdleShutdown();
     return parsed;
   }
 
@@ -293,6 +305,13 @@ export function makePythonEngine(
       const payload: ServeRequest = { videoPath, language };
       const task = () => sendWithRetry(payload);
 
+      // Este request queda "en vuelo" desde YA (aunque todavía espere turno
+      // en `chain`), así que desarmamos cualquier idle timer pendiente de
+      // inmediato y de forma síncrona: no dependemos de que la cola llegue a
+      // ejecutar este request para notar que ya no está ociosa.
+      pendingCount += 1;
+      clearIdleTimer();
+
       // Encadena tras la tarea anterior (haya tenido éxito o no) para
       // serializar el acceso al proceso --serve: `chain` siempre queda en
       // estado resuelto (nunca rechazado) para que un fallo de un clip no
@@ -301,6 +320,21 @@ export function makePythonEngine(
       chain = result.then(
         () => undefined,
         () => undefined,
+      );
+
+      // Pase lo que pase con este request (éxito, error por-clip, o muerte
+      // de proceso con reintento agotado), al terminar dejamos de contarlo
+      // como pendiente y, si con eso la cola queda realmente vacía y sin
+      // nada en vuelo, recién ahí armamos el apagado por inactividad.
+      result.then(
+        () => {
+          pendingCount -= 1;
+          scheduleIdleShutdownIfIdle();
+        },
+        () => {
+          pendingCount -= 1;
+          scheduleIdleShutdownIfIdle();
+        },
       );
 
       return result.then((raw) => ({

@@ -1,18 +1,55 @@
+/* ==========================================================================
+   AgroMax — sistema de diseño del frontend v2
+   Estética: "cuaderno de campo agro-industrial". Papel verdoso claro,
+   cabecera en tinta oscura (la misma de la intro de las clases), verdes de
+   marca #22C55E / #16A34A, tipografía Poppins cargada LOCAL (remotion/fonts,
+   sin red). El wizard del job es un riel vertical de 8 nodos.
+   ========================================================================== */
+
 :root {
-  --color-bg: #f7faf7;
-  --color-surface: #ffffff;
-  --color-border: #dcdcd6;
-  --color-text: #1f2320;
-  --color-muted: #6b7268;
-  --color-green-light: #3dbe4b;
-  --color-green-dark: #0e8a4e;
-  --color-primary: var(--color-green-dark);
-  --color-primary-hover: #0b6f3f;
-  --color-accent: var(--color-green-light);
-  --color-error-bg: #fdecec;
-  --color-error-border: #f2b8b8;
-  --color-error-text: #a12626;
-  --radius: 8px;
+  /* Marca (mismos valores que src/lib/constants.ts / remotion/Intro.tsx) */
+  --ink: #08140c;
+  --ink-soft: #0f2416;
+  --green: #16a34a;
+  --green-bright: #22c55e;
+  --green-deep: #0c6b34;
+
+  /* Superficie */
+  --paper: #f2f6ef;
+  --surface: #ffffff;
+  --border: #dee6d8;
+  --border-strong: #c8d4c0;
+
+  /* Texto */
+  --text: #1b241c;
+  --muted: #5f6d5e;
+
+  /* Estados */
+  --amber: #9a5b06;
+  --amber-bg: #fdf3e0;
+  --amber-border: #ecc57f;
+  --red: #b42318;
+  --red-bg: #fdecea;
+  --red-border: #f2b8b0;
+
+  --radius: 10px;
+  --radius-lg: 16px;
+  --shadow-card: 0 1px 2px rgba(8, 20, 12, 0.05), 0 4px 16px rgba(8, 20, 12, 0.05);
+
+  /* Compat con clases viejas */
+  --color-bg: var(--paper);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-green-light: var(--green-bright);
+  --color-green-dark: var(--green);
+  --color-primary: var(--green);
+  --color-primary-hover: var(--green-deep);
+  --color-accent: var(--green-bright);
+  --color-error-bg: var(--red-bg);
+  --color-error-border: var(--red-border);
+  --color-error-text: var(--red);
 }
 
 * {
@@ -27,47 +64,65 @@ body {
 
 body {
   font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
-    sans-serif;
-  background: var(--color-bg);
-  color: var(--color-text);
-  line-height: 1.5;
+    var(--font-poppins, 'Poppins'), -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Helvetica, Arial, sans-serif;
+  background:
+    radial-gradient(1200px 500px at 85% -10%, rgba(34, 197, 94, 0.07), transparent 60%),
+    var(--paper);
+  color: var(--text);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
 }
 
 a {
-  color: var(--color-primary);
+  color: var(--green);
 }
 
 a:hover {
-  color: var(--color-primary-hover);
+  color: var(--green-deep);
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-green-light);
+  outline: 2px solid var(--green-bright);
   outline-offset: 2px;
 }
 
-/* Header de marca */
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+}
+
+/* --------------------------------------------------------------------------
+   Cabecera de marca — tinta oscura como la intro, con la línea verde al pie.
+   -------------------------------------------------------------------------- */
 .site-header {
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
+  background:
+    radial-gradient(circle at 82% 0%, rgba(22, 163, 74, 0.35) 0%, transparent 55%),
+    var(--ink);
+  border-bottom: 3px solid transparent;
+  border-image: linear-gradient(90deg, var(--green-bright), var(--green)) 1;
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 0.65rem;
-  max-width: 960px;
+  gap: 0.7rem;
+  max-width: 1020px;
   margin: 0 auto;
-  padding: 0.75rem 1.5rem;
+  padding: 0.8rem 1.5rem;
   text-decoration: none;
   color: inherit;
+  width: 100%;
 }
 
 .brand-logo {
-  height: 36px;
-  width: 36px;
+  height: 38px;
+  width: 38px;
   object-fit: contain;
+  filter: drop-shadow(0 0 10px rgba(34, 197, 94, 0.35));
 }
 
 .brand-text {
@@ -78,81 +133,120 @@ a:hover {
 
 .brand-name {
   font-weight: 700;
-  font-size: 1.05rem;
-  color: var(--color-green-dark);
+  font-size: 1.08rem;
+  color: #ffffff;
+  letter-spacing: 0.01em;
 }
 
 .brand-subtitle {
   font-size: 0.72rem;
-  color: var(--color-muted);
+  font-weight: 500;
+  color: var(--green-bright);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
 }
 
 .container {
-  max-width: 960px;
+  max-width: 1020px;
   margin: 0 auto;
-  padding: 2rem 1.5rem;
+  padding: 2rem 1.5rem 4rem;
 }
 
-h1,
-h2,
-h3 {
-  line-height: 1.2;
-}
-
-/* Botones */
+/* --------------------------------------------------------------------------
+   Botones
+   -------------------------------------------------------------------------- */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  padding: 0.55rem 1.1rem;
-  border-radius: var(--radius);
-  border: 1px solid var(--color-primary);
-  background: var(--color-primary);
+  padding: 0.55rem 1.15rem;
+  border-radius: 999px;
+  border: 1px solid var(--green);
+  background: linear-gradient(180deg, var(--green-bright), var(--green));
   color: #fff;
-  font-size: 0.95rem;
-  font-weight: 500;
+  font-family: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.12s ease,
+    filter 0.12s ease;
+  box-shadow: 0 2px 8px rgba(22, 163, 74, 0.28);
 }
 
-.btn:hover {
-  background: var(--color-primary-hover);
+.btn:hover:not(:disabled) {
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(22, 163, 74, 0.32);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .btn-secondary {
+  background: var(--surface);
+  color: var(--green-deep);
+  border-color: var(--border-strong);
+  box-shadow: none;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.08);
+  border-color: var(--green);
+  filter: none;
+}
+
+.btn-ghost {
   background: transparent;
-  color: var(--color-primary);
+  color: var(--muted);
+  border-color: transparent;
+  box-shadow: none;
 }
 
-.btn-secondary:hover {
-  background: rgba(47, 109, 58, 0.08);
+.btn-ghost:hover:not(:disabled) {
+  color: var(--green-deep);
+  background: rgba(34, 197, 94, 0.07);
+  filter: none;
 }
 
-/* Inputs */
+.btn-danger-outline {
+  background: var(--surface);
+  color: var(--red);
+  border-color: var(--red-border);
+  box-shadow: none;
+}
+
+/* --------------------------------------------------------------------------
+   Inputs
+   -------------------------------------------------------------------------- */
 .input,
 .select,
 textarea {
   width: 100%;
   padding: 0.5rem 0.75rem;
   border-radius: var(--radius);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: 0.95rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.92rem;
 }
 
 .input:focus,
 .select:focus,
 textarea:focus {
-  outline: 2px solid var(--color-green-light);
+  outline: 2px solid var(--green-bright);
   outline-offset: 1px;
-  border-color: var(--color-primary);
+  border-color: var(--green);
 }
 
 .field {
@@ -163,38 +257,42 @@ textarea:focus {
 }
 
 .field label {
-  font-size: 0.85rem;
-  color: var(--color-muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--muted);
 }
 
-/* Tablas / filas */
+/* --------------------------------------------------------------------------
+   Tablas / filas / badges (compat con secciones existentes)
+   -------------------------------------------------------------------------- */
 .table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
+  font-size: 0.9rem;
 }
 
 .table th,
 .table td {
-  padding: 0.6rem 0.9rem;
+  padding: 0.55rem 0.9rem;
   text-align: left;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--border);
 }
 
 .table th {
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   text-transform: uppercase;
-  letter-spacing: 0.02em;
-  color: var(--color-muted);
-  background: var(--color-bg);
-  border-bottom: 2px solid var(--color-accent);
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  background: var(--paper);
+  border-bottom: 2px solid var(--green-bright);
 }
 
 .table tbody tr:hover {
-  background: rgba(61, 190, 75, 0.06);
+  background: rgba(34, 197, 94, 0.05);
 }
 
 .row {
@@ -202,110 +300,89 @@ textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.6rem 0.9rem;
-  border: 1px solid var(--color-border);
-  border-left: 3px solid var(--color-accent);
+  padding: 0.55rem 0.9rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green-bright);
   border-radius: var(--radius);
-  background: var(--color-surface);
+  background: var(--surface);
+  font-size: 0.9rem;
 }
 
 .row + .row {
   margin-top: 0.5rem;
 }
 
-/* Badges */
 .badge {
   display: inline-block;
-  padding: 0.15rem 0.5rem;
+  padding: 0.14rem 0.55rem;
   border-radius: 999px;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 600;
+  background: rgba(22, 163, 74, 0.1);
+  color: var(--green-deep);
+  border: 1px solid rgba(22, 163, 74, 0.22);
+}
+
+.badge-neutral {
+  background: var(--paper);
+  color: var(--muted);
+  border-color: var(--border);
 }
 
 .badge-error {
-  background: var(--color-error-bg);
-  color: var(--color-error-text);
-  border: 1px solid var(--color-error-border);
+  background: var(--red-bg);
+  color: var(--red);
+  border: 1px solid var(--red-border);
 }
 
-/* Banner de error */
+.badge-warning {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border: 1px solid var(--amber-border);
+}
+
 .error-banner {
-  padding: 0.75rem 1rem;
+  padding: 0.85rem 1.1rem;
   border-radius: var(--radius);
-  background: var(--color-error-bg);
-  border: 1px solid var(--color-error-border);
-  color: var(--color-error-text);
-  margin-bottom: 1rem;
-}
-
-/* Stepper de etapas del pipeline (jobs/[jobId]) */
-.stepper {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  list-style: none;
-  padding: 0;
-  margin: 1.25rem 0;
-}
-
-.stepper-step {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.8rem;
-  border-radius: 999px;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  color: var(--color-muted);
-  font-size: 0.85rem;
-}
-
-.stepper-step--done {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-}
-
-.stepper-step--active {
-  border-color: var(--color-accent);
-  color: var(--color-text);
-  background: rgba(61, 190, 75, 0.08);
-  font-weight: 600;
-}
-
-.stepper-step--error {
-  border-color: var(--color-error-border);
-  color: var(--color-error-text);
-}
-
-.stepper-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.1rem;
+  background: var(--red-bg);
+  border: 1px solid var(--red-border);
+  color: var(--red);
+  margin-bottom: 1.25rem;
 }
 
 .stepper-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
   margin: 0.75rem 0;
 }
 
 .stepper-error-msg {
-  color: var(--color-error-text);
+  color: var(--red);
   font-size: 0.85rem;
+  margin: 0.35rem 0;
 }
 
-/* Spinner CSS simple para la etapa activa y filas en transcripción */
+.notice-ok {
+  color: var(--green-deep);
+  font-size: 0.85rem;
+  margin: 0.35rem 0;
+}
+
+/* Spinner */
 .spinner {
   display: inline-block;
   width: 0.9rem;
   height: 0.9rem;
-  border: 2px solid var(--color-border);
-  border-top-color: var(--color-primary);
+  border: 2px solid rgba(22, 163, 74, 0.25);
+  border-top-color: var(--green);
   border-radius: 50%;
   animation: agromax-spin 0.7s linear infinite;
 }
 
 .spinner-inline {
-  margin-right: 0.3rem;
+  margin-right: 0.35rem;
   vertical-align: middle;
 }
 
@@ -315,59 +392,564 @@ textarea:focus {
   }
 }
 
-/* Barra de progreso de subida del ZIP (page.tsx) */
+/* --------------------------------------------------------------------------
+   HOME — hero + tarjeta de subida + historial de proyectos
+   -------------------------------------------------------------------------- */
+.home-hero {
+  padding: 2.4rem 0 1.6rem;
+}
+
+.home-kicker {
+  margin: 0 0 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--green);
+}
+
+.home-title {
+  margin: 0;
+  font-size: clamp(1.7rem, 4.5vw, 2.6rem);
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.home-title em {
+  font-style: normal;
+  color: var(--green);
+}
+
+.home-sub {
+  margin: 0.6rem 0 0;
+  max-width: 46rem;
+  color: var(--muted);
+  font-size: 0.98rem;
+}
+
+.upload-card {
+  margin-top: 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 1.4rem 1.5rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.upload-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  background: linear-gradient(180deg, var(--green-bright), var(--green));
+}
+
+.upload-card h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+}
+
+.upload-hint {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* Zona de selección de archivo (input file estilizado) */
+.dropzone {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 1rem 1.1rem;
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  margin-bottom: 1rem;
+}
+
+.dropzone:hover {
+  border-color: var(--green);
+  background: rgba(34, 197, 94, 0.05);
+}
+
+.dropzone input[type='file'] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.dropzone-icon {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(180deg, var(--green-bright), var(--green));
+  color: #fff;
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.dropzone-text strong {
+  display: block;
+  font-size: 0.95rem;
+}
+
+.dropzone-text span {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .upload-progress {
   margin-bottom: 1rem;
 }
 
-.upload-progress-bar-track {
+.upload-progress-bar-track,
+.pbar-track {
   width: 100%;
-  height: 0.6rem;
+  height: 0.55rem;
   border-radius: 999px;
-  background: var(--color-border);
+  background: #e4ebe0;
   overflow: hidden;
 }
 
-.upload-progress-bar-fill {
+.upload-progress-bar-fill,
+.pbar-fill {
   height: 100%;
-  background: linear-gradient(
-    90deg,
-    var(--color-green-light),
-    var(--color-green-dark)
-  );
-  transition: width 0.15s ease;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--green-bright), var(--green));
+  transition: width 0.2s ease;
 }
 
-.upload-progress-label {
+.pbar-fill--indeterminate {
+  width: 40% !important;
+  animation: pbar-slide 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes pbar-slide {
+  from {
+    transform: translateX(-30%);
+  }
+  to {
+    transform: translateX(180%);
+  }
+}
+
+.upload-progress-label,
+.pbar-label {
   margin: 0.4rem 0 0;
-  font-size: 0.85rem;
-  color: var(--color-muted);
+  font-size: 0.83rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
-/* Bloque de master.txt en la sección colapsable */
+/* Historial */
+.jobs-list {
+  margin-top: 2.2rem;
+}
+
+.jobs-list h2 {
+  font-size: 1.05rem;
+  margin-bottom: 0.75rem;
+}
+
+.jobs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 0.8rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.job-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.95rem 1.05rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-decoration: none;
+  color: inherit;
+  box-shadow: var(--shadow-card);
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+
+.job-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--green);
+  color: inherit;
+}
+
+.job-card-name {
+  font-weight: 600;
+  font-size: 0.98rem;
+  overflow-wrap: anywhere;
+}
+
+.job-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.jobs-empty {
+  color: var(--muted);
+  font-size: 0.9rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 1rem 1.2rem;
+  background: var(--surface);
+}
+
+/* --------------------------------------------------------------------------
+   WIZARD del job — riel vertical de 8 pasos
+   -------------------------------------------------------------------------- */
+.job-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.9rem;
+  margin: 0.5rem 0 0.25rem;
+}
+
+.job-head h1 {
+  margin: 0;
+  font-size: clamp(1.35rem, 3.5vw, 1.9rem);
+  color: var(--ink);
+}
+
+.job-head-sub {
+  margin: 0 0 1.4rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.wz {
+  list-style: none;
+  margin: 1.25rem 0 0;
+  padding: 0;
+}
+
+.wz-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  column-gap: 0.9rem;
+  padding-bottom: 1.1rem;
+}
+
+/* Línea del riel */
+.wz-step::before {
+  content: '';
+  position: absolute;
+  left: 22px;
+  top: 40px;
+  bottom: -4px;
+  width: 2px;
+  background: var(--border-strong);
+}
+
+.wz-step:last-child::before {
+  display: none;
+}
+
+.wz-step--listo::before {
+  background: var(--green);
+}
+
+/* Nodo */
+.wz-node {
+  position: relative;
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 1rem;
+  border: 2px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.wz-step--listo .wz-node {
+  background: linear-gradient(180deg, var(--green-bright), var(--green));
+  border-color: var(--green);
+  color: #fff;
+}
+
+.wz-step--corriendo .wz-node {
+  border-color: var(--green);
+  color: var(--green-deep);
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.45);
+  animation: wz-pulse 1.6s ease-out infinite;
+}
+
+.wz-step--atencion .wz-node {
+  border-color: var(--amber-border);
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+
+.wz-step--error .wz-node {
+  border-color: var(--red-border);
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+.wz-step--bloqueado .wz-node {
+  opacity: 0.55;
+}
+
+@keyframes wz-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgba(34, 197, 94, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+/* Tarjeta del paso */
+.wz-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.wz-step--corriendo .wz-card {
+  border-color: rgba(34, 197, 94, 0.55);
+}
+
+.wz-step--atencion .wz-card {
+  border-color: var(--amber-border);
+}
+
+.wz-step--error .wz-card {
+  border-color: var(--red-border);
+}
+
+.wz-step--bloqueado .wz-card {
+  opacity: 0.72;
+}
+
+.wz-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.7rem;
+  width: 100%;
+  padding: 0.8rem 1.1rem;
+  background: transparent;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wz-card-head:hover {
+  background: rgba(34, 197, 94, 0.04);
+}
+
+.wz-title {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--ink);
+  margin-right: auto;
+}
+
+.wz-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.wz-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.16rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.73rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.wz-chip--pendiente,
+.wz-chip--bloqueado {
+  background: var(--paper);
+  color: var(--muted);
+  border-color: var(--border);
+}
+
+.wz-chip--corriendo {
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--green-deep);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.wz-chip--listo {
+  background: linear-gradient(180deg, var(--green-bright), var(--green));
+  color: #fff;
+  border-color: var(--green);
+}
+
+.wz-chip--atencion {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border-color: var(--amber-border);
+}
+
+.wz-chip--error {
+  background: var(--red-bg);
+  color: var(--red);
+  border-color: var(--red-border);
+}
+
+.wz-chip-time {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--border);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.wz-caret {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.75rem;
+  transition: transform 0.15s ease;
+}
+
+.wz-caret--open {
+  transform: rotate(90deg);
+}
+
+.wz-body {
+  padding: 0.25rem 1.1rem 1.1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.92rem;
+}
+
+.wz-desc {
+  margin: 0.6rem 0 0.8rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.wz-lock-hint {
+  margin: 0.6rem 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Progreso X/N dentro de la cabecera del paso */
+.wz-head-progress {
+  flex-basis: 100%;
+  padding: 0 1.1rem 0.8rem;
+}
+
+/* Sub-etapas dentro de un paso (probe / transcribir / frames, etc.) */
+.substage {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0;
+  font-size: 0.88rem;
+}
+
+.substage + .substage {
+  border-top: 1px dashed var(--border);
+}
+
+.substage-icon {
+  flex: none;
+  width: 1.25rem;
+  text-align: center;
+  color: var(--green);
+}
+
+.substage-name {
+  min-width: 9rem;
+  font-weight: 500;
+}
+
+.substage-meta {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Modo experto */
+.expert-zone {
+  margin-top: 2rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 0.8rem 1.1rem;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.expert-zone summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.expert-zone p {
+  font-size: 0.83rem;
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------------------------
+   Secciones heredadas (transcripción, frames, estructura, cortes, ensamblaje)
+   -------------------------------------------------------------------------- */
 .master-pre {
   max-height: 420px;
   overflow: auto;
   padding: 1rem;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--paper);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   white-space: pre-wrap;
-  font-size: 0.85rem;
+  font-size: 0.83rem;
 }
 
-/* Galería de frames por clip (etapa 3.5, jobs/[jobId]) */
 .frames-section {
-  margin-top: 1.5rem;
+  margin-top: 1rem;
 }
 
 .clip-details {
   margin-top: 0.75rem;
   padding: 0.6rem 0.9rem;
-  border: 1px solid var(--color-border);
-  border-left: 3px solid var(--color-accent);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green-bright);
   border-radius: var(--radius);
-  background: var(--color-surface);
+  background: var(--surface);
 }
 
 .clip-summary {
@@ -398,22 +980,17 @@ textarea:focus {
   aspect-ratio: 16 / 9;
   object-fit: cover;
   border-radius: var(--radius);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--border);
 }
 
 .frame-caption {
   font-size: 0.72rem;
-  color: var(--color-muted);
-}
-
-/* Sección de auditoría de la etapa de plan (agente autónomo, jobs/[jobId]) */
-.audit-section {
-  margin-top: 1.5rem;
+  color: var(--muted);
 }
 
 .audit-hint {
   font-size: 0.85rem;
-  color: var(--color-muted);
+  color: var(--muted);
 }
 
 .structure-tree {
@@ -425,10 +1002,10 @@ textarea:focus {
 
 .structure-module {
   padding: 0.75rem 1rem;
-  border: 1px solid var(--color-border);
-  border-left: 3px solid var(--color-primary);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green);
   border-radius: var(--radius);
-  background: var(--color-surface);
+  background: var(--surface);
 }
 
 .structure-module h4 {
@@ -438,7 +1015,7 @@ textarea:focus {
 .structure-module-topics {
   margin: 0 0 0.5rem;
   font-size: 0.8rem;
-  color: var(--color-muted);
+  color: var(--muted);
 }
 
 .structure-lesson-list,
@@ -459,7 +1036,7 @@ textarea:focus {
 .structure-segment-list {
   margin-top: 0.3rem;
   padding-left: 0.75rem;
-  border-left: 2px solid var(--color-border);
+  border-left: 2px solid var(--border);
 }
 
 .structure-segment {
@@ -468,14 +1045,13 @@ textarea:focus {
 }
 
 .structure-segment-range {
-  color: var(--color-muted);
+  color: var(--muted);
 }
 
 .structure-segment-topic {
-  color: var(--color-text);
+  color: var(--text);
 }
 
-/* Tarjetas de veredicto por clip */
 .clip-cards {
   display: flex;
   flex-direction: column;
@@ -485,16 +1061,16 @@ textarea:focus {
 
 .clip-card {
   padding: 0.75rem 1rem;
-  border: 1px solid var(--color-border);
-  border-left: 3px solid var(--color-accent);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green-bright);
   border-radius: var(--radius);
-  background: var(--color-surface);
+  background: var(--surface);
 }
 
 .clip-card--low-confidence {
-  border-color: #e2a336;
-  border-left-color: #e2a336;
-  background: #fff9ef;
+  border-color: var(--amber-border);
+  border-left-color: var(--amber-border);
+  background: #fffaf0;
 }
 
 .clip-card-header {
@@ -509,7 +1085,6 @@ textarea:focus {
   font-weight: 600;
 }
 
-/* Badges de veredicto por color, según el tipo */
 .verdict-badge {
   display: inline-block;
   padding: 0.15rem 0.55rem;
@@ -519,9 +1094,9 @@ textarea:focus {
 }
 
 .verdict-badge--leccion {
-  background: rgba(14, 138, 78, 0.12);
-  color: var(--color-green-dark);
-  border: 1px solid rgba(14, 138, 78, 0.35);
+  background: rgba(22, 163, 74, 0.12);
+  color: var(--green-deep);
+  border: 1px solid rgba(22, 163, 74, 0.35);
 }
 
 .verdict-badge--broll {
@@ -531,46 +1106,35 @@ textarea:focus {
 }
 
 .verdict-badge--descartar {
-  background: var(--color-error-bg);
-  color: var(--color-error-text);
-  border: 1px solid var(--color-error-border);
+  background: var(--red-bg);
+  color: var(--red);
+  border: 1px solid var(--red-border);
 }
 
 .verdict-badge--otro-curso {
-  background: rgba(226, 163, 54, 0.15);
-  color: #a06a12;
-  border: 1px solid rgba(226, 163, 54, 0.4);
+  background: var(--amber-bg);
+  color: var(--amber);
+  border: 1px solid var(--amber-border);
 }
 
-.badge-warning {
-  background: rgba(226, 163, 54, 0.15);
-  color: #a06a12;
-  border: 1px solid rgba(226, 163, 54, 0.4);
-}
-
-/* Barra de confianza del veredicto */
 .confidence-bar {
   width: 100%;
   height: 0.5rem;
   border-radius: 999px;
-  background: var(--color-border);
+  background: #e4ebe0;
   overflow: hidden;
   margin-top: 0.25rem;
 }
 
 .confidence-bar-fill {
   height: 100%;
-  background: linear-gradient(
-    90deg,
-    var(--color-green-light),
-    var(--color-green-dark)
-  );
+  background: linear-gradient(90deg, var(--green-bright), var(--green));
 }
 
 .confidence-label {
   margin: 0.25rem 0 0.4rem;
   font-size: 0.78rem;
-  color: var(--color-muted);
+  color: var(--muted);
 }
 
 .heuristic-chips {
@@ -585,26 +1149,25 @@ textarea:focus {
   padding: 0.1rem 0.5rem;
   border-radius: 999px;
   font-size: 0.72rem;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  color: var(--color-muted);
+  background: var(--paper);
+  border: 1px solid var(--border);
+  color: var(--muted);
 }
 
 .frames-extra-marker {
   font-size: 0.8rem;
-  color: var(--color-text);
+  color: var(--text);
   margin: 0.4rem 0;
 }
 
 .frames-extra-detail {
-  color: var(--color-muted);
+  color: var(--muted);
 }
 
 .frames-grid--mini {
   grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
 }
 
-/* Sección de apartados (descartes / otro curso) */
 .apartados-section {
   margin-top: 1.25rem;
 }
@@ -615,11 +1178,10 @@ textarea:focus {
 
 .apartado-razon {
   font-size: 0.85rem;
-  color: var(--color-muted);
+  color: var(--muted);
   text-align: right;
 }
 
-/* decisiones.md */
 .decisiones-details {
   margin-top: 1.25rem;
 }
@@ -627,12 +1189,7 @@ textarea:focus {
 .usage-line {
   margin-top: 0.75rem;
   font-size: 0.8rem;
-  color: var(--color-muted);
-}
-
-/* Sección de preparación del corte (5A/5B/5C, jobs/[jobId]) */
-.prep-section {
-  margin-top: 1.25rem;
+  color: var(--muted);
 }
 
 .cuts-lessons {
@@ -668,7 +1225,7 @@ textarea:focus {
 }
 
 .cuts-empty {
-  color: var(--color-muted);
+  color: var(--muted);
   font-size: 0.85rem;
   margin: 0.25rem 0 0.25rem 0.5rem;
 }
@@ -678,26 +1235,21 @@ textarea:focus {
   font-size: 0.85rem;
 }
 
-/* Sección de clases ensambladas (etapas 9 + 11, jobs/[jobId]) */
-.assembly-section {
-  margin-top: 1.25rem;
-}
-
 .assembly-progress {
   margin: 0.5rem 0 0.75rem;
   font-weight: 600;
 }
 
-/* Grilla de tarjetas por clase: una columna en móvil, dos desde tablet. */
 .assembly-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 1rem;
 }
 
 .assembly-card {
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
   padding: 0.75rem;
   display: flex;
   flex-direction: column;
@@ -712,25 +1264,81 @@ textarea:focus {
 }
 
 .assembly-card-id {
-  color: var(--color-muted);
-  font-size: 0.8rem;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .assembly-card-status {
   margin: 0;
-  color: var(--color-muted);
+  color: var(--muted);
 }
 
 .assembly-card-meta {
   margin: 0;
-  color: var(--color-muted);
-  font-size: 0.8rem;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
-/* El video ocupa el ancho de la tarjeta manteniendo el 16:9 del render. */
 .assembly-video {
   width: 100%;
   aspect-ratio: 16 / 9;
   background: #000;
   border-radius: 6px;
+}
+
+/* QA (paso 7) */
+.qa-lesson-row {
+  flex-wrap: wrap;
+}
+
+.qa-lesson-name {
+  font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.qa-lesson-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: auto;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .container {
+    padding: 1.25rem 0.9rem 3rem;
+  }
+
+  .wz-step {
+    grid-template-columns: 34px minmax(0, 1fr);
+    column-gap: 0.6rem;
+  }
+
+  .wz-node {
+    width: 32px;
+    height: 32px;
+    font-size: 0.85rem;
+  }
+
+  .wz-step::before {
+    left: 16px;
+    top: 32px;
+  }
+
+  .wz-card-head {
+    padding: 0.7rem 0.85rem;
+  }
+
+  .wz-body {
+    padding: 0.25rem 0.85rem 0.9rem;
+  }
+
+  .substage-name {
+    min-width: 6.5rem;
+  }
+
+  .apartado-razon {
+    text-align: left;
+  }
 }
