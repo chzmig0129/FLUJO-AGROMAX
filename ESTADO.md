@@ -128,24 +128,71 @@ está resuelto en `runPrepStages` (`src/lib/pipeline.ts`) con un
 
 ---
 
-## Última corrida
+## Última corrida — re-corrida DEFINITIVA (julio 2026)
 
-**OVINOS_AGROMAX — completada el 27 de julio de 2026.**
+**OVINOS_AGROMAX — job `891533f3-29cc-4fe1-9923-fce82115a5c2`.** Curso de 43
+clases en 6 módulos (Manejo diario 7, Instalaciones 6, Razas 3, Reproducción
+7, Nutrición 18, Sanidad 2), ~211 min. Corrida en la PC (`ssh itg`,
+`C:\FLUJO-AGROMAX`, backend `remotion` headless, UI
+`https://itg.tailf75570.ts.net`).
 
-- Job: `891533f3-29cc-4fe1-9923-fce82115a5c2`
-- Estado final: `assembled`, con `error: null`.
-- Render: 43/43 MP4 y 43/43 sidecars completos (`expectedFrames === actualFrames`).
-- Gate 2: 43/43 clases `APPROVED`.
-- Gate 3: 6/6 módulos `APPROVED`, 134/134 frames revisados y cero hallazgos bloqueantes abiertos.
-- Correcciones finales verificadas: se retiró el cierre ajeno de
-  `bebederos-y-suministro-de-agua`; `IMG_0565`, `IMG_0611` e `IMG_0596`
-  quedaron con proporciones naturales y pillarbox en
-  `procedimiento-de-laparoscopia`; la portada final dice inequívocamente
-  «¿Alimentas o nutres a tu ganado?».
-- Entrega: `jobs/891533f3-29cc-4fe1-9923-fce82115a5c2/deliver/CURSO_OVINOS_AGROMAX/`
-  con 6 módulos, 43 MP4, 43 archivos `NOTAS.md`, `ESTRUCTURA_CURSO.md`,
-  `QA_LOG.md`, `DECISIONES.md` y `deliver/manifest.json` (`packagedAt:
-  2026-07-27T15:41:50.115Z`). Los 43/43 MP4 entregados coinciden por tamaño
-  y SHA con sus renders fuente.
-- Evidencia final: `C:\tmp\jjv-evidence.json` (SHA-256
-  `2450e43673ca0c4e31000e6ad4ad00a300edadc2f32ebc540ace4a2564f5d076`).
+Esta re-corrida rehízo el render completo con el **código final** (overlays
+con límite de altura, anclados esquina superior izquierda) y **corrigió dos
+overlays** que Gate 1 había rechazado por contenido ajeno al tema —no por la
+paloma, que ya estaba resuelta:
+
+- **`macro_y_microminerales`** (clase `vitaminas-y-minerales`): el modelo
+  había escrito la fórmula NPK de fertilizante agrícola («nitrógeno, fósforo,
+  potasio») en vez de los macrominerales de nutrición animal. Corregido a
+  **calcio, fósforo, sodio, potasio, magnesio, azufre**.
+- **`ventajas_de_inseminar`** (clase `laparoscopia-fundamentos`): la tarjeta 3
+  dibujaba una **cabra** en vez de un borrego y llevaba una X roja que
+  contradecía el título. Corregido a **dos borregos lanudos** con las tres
+  tarjetas en palomita verde.
+
+Ambos se regeneraron vía Chrome CDP (puerto 9223, cuenta Pro; el 9222 quedó
+caído) usando `.venv-overlays\Scripts\python.exe` (el `python` pelado de la PC
+no tiene playwright), se procesaron a PNG, se verificaron visualmente, se
+marcaron `APPROVED` en `qa/gate1.json` y se reconstruyó el `overlays-timeline`
+(que reveló, de paso, que `vitaminas-y-minerales` tenía el timeline **vacío**
+—le faltaban todos sus overlays en el render viejo—). Solo esas 2 clases más
+otras 2 que habían fallado por proxy se re-renderizaron; las 39 restantes se
+conservaron por huella (fingerprint) válida.
+
+**Incidentes operativos resueltos durante la corrida** (documentados en las
+memorias `bd`):
+
+- **Disco lleno (210 GB → 2 GB).** Cada render de Remotion crea ~13-18 GB de
+  frames temporales en `%TEMP%\agromax-remotion-<job>-<pid>`; al matar `node`
+  entre reinicios, esas carpetas quedaban huérfanas y se acumularon ~110 GB,
+  reventando los renders con un error engañoso de «Chrome rejecting the request
+  because disk space is low». Se borraron las huérfanas (las de PID muerto) →
+  disco de vuelta en ~94 GB.
+- **Concurrencia.** `REMOTION_CONCURRENCY=10` subió el uso de CPU de 30 % a
+  ~60 % (la GPU queda en 0 %: Remotion rasteriza los frames en Chrome por
+  software y encodea con libx264, no usa la RTX 2060), pero 10 seeks
+  simultáneos sobre los proxies grandes (~500 MB) de Nutrición tumbaban el
+  servidor de proxies. Se bajó a **6**, punto dulce estable: ~1.5× más rápido
+  que 4 y sin fallos.
+
+**Resultados verificados esta corrida:**
+
+- Render: **43/43 MP4**, `job = assembled`, `error: null`, **0 errores** en la
+  corrida final a concurrencia 6.
+- **Gate 1: 136/136 overlays `APPROVED`** (los 2 corregidos incluidos).
+- **Gate 2: 43/43 clases `APPROVED`** (0 rechazos, re-juzgadas sobre el render
+  nuevo).
+- **Gate 3: 6/6 módulos `APPROVED`** (`manejo-diario`, `instalaciones`,
+  `razas`, `reproduccion`, `nutricion`, `sanidad`) — el tail (Gate 3 +
+  empaquetado) se corrió con Codex e incorporó estos re-renders.
+- **Empaquetado / entrega: completa.**
+  `jobs/891533f3-29cc-4fe1-9923-fce82115a5c2/deliver/CURSO_OVINOS_AGROMAX/`
+  con 6 módulos, **43 MP4**, 43 `NOTAS.md`, `ESTRUCTURA_CURSO.md`, `QA_LOG.md`,
+  `DECISIONES.md` y `deliver/manifest.json` (43 lecciones).
+
+> **Verificado:** los 43/43 MP4 entregados coinciden en tamaño con sus
+> renders fuente (0 mismatch), incluidas las 4 clases re-renderizadas esta
+> corrida —`laparoscopia-fundamentos`, `vitaminas-y-minerales`,
+> `minerales-vitaminas-y-aditivos`, `conversion-y-eficiencia-alimenticia`—.
+> O sea, la entrega final **contiene los overlays corregidos** (macrominerales
+> animales y borregos, ya sin el NPK ni la cabra).

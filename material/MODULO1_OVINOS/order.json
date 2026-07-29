@@ -1,0 +1,13 @@
+{
+  "course": "OVINOS_AGROMAX — Módulo 1: Manejo diario del rebaño",
+  "note": "Ground truth extraída del structure.json final de la corrida v1 (PC, job 891533f3). Sirve para comparar el plan que arme la IA en v2.",
+  "lessons": [
+    { "order": 1, "title": "La rutina diaria al llegar al corral", "clips": ["IMG_0527.MOV"] },
+    { "order": 2, "title": "Lectura de comederos", "clips": ["IMG_0531.MOV"] },
+    { "order": 3, "title": "Inspección de los animales en el corral", "clips": ["IMG_0532.MOV"] },
+    { "order": 4, "title": "Bebederos y suministro de agua", "clips": ["IMG_0533.MOV", "IMG_0541.MOV", "IMG_0600.MOV"], "broll": ["IMG_0600.MOV"] },
+    { "order": 5, "title": "Revisión de corderos recién nacidos", "clips": ["IMG_0534.MOV"] },
+    { "order": 6, "title": "La servida diaria de alimento", "clips": ["IMG_0535.MOV", "IMG_0536.MOV"] },
+    { "order": 7, "title": "Manejos generales del rebaño", "clips": ["IMG_0548.MOV"] }
+  ]
+}
